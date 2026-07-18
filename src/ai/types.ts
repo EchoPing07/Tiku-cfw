@@ -29,6 +29,10 @@ export interface AIRequest {
 export interface AIResult {
   content: string;
   model: string;
+  /** 发送给 AI 的原始请求体（JSON 字符串），用于日志调试 */
+  rawRequest: string;
+  /** AI 返回的原始响应体（JSON 字符串），用于日志调试 */
+  rawResponse: string;
 }
 
 /** 数据库行：AI 渠道 */
@@ -64,4 +68,20 @@ export interface DispatchResult {
   content: string;
   channelName: string;
   model: string;
+  /** 发送给 AI 的原始请求体（JSON 字符串） */
+  rawRequest: string;
+  /** AI 返回的原始响应体（JSON 字符串） */
+  rawResponse: string;
+}
+
+/** AI 调度错误（携带原始请求/响应用于调试） */
+export class AIError extends Error {
+  rawRequest?: string;
+  rawResponse?: string;
+  constructor(message: string, rawRequest?: string, rawResponse?: string) {
+    super(message);
+    this.name = 'AIError';
+    this.rawRequest = rawRequest;
+    this.rawResponse = rawResponse;
+  }
 }

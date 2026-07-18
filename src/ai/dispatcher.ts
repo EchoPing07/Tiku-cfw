@@ -1,5 +1,6 @@
 import type { Env } from '../types/env';
 import type { ChatMessage, ChannelType, DispatchResult, AIChannelRow, AIChannelKeyRow } from './types';
+import { AIError } from './types';
 import { callOpenAI } from './openai-client';
 import { buildSystemPrompt, buildUserMessage, buildVisionMessage } from './prompt';
 import { parseAIAnswer } from './answer-parser';
@@ -81,11 +82,23 @@ export async function dispatchAI(opts: DispatchOptions): Promise<DispatchResult>
   ).bind(channelType).all<AIChannelRow>();
 
   if (!channels.results || channels.results.length === 0) {
-    throw new Error(`没有可用的${channelType === 'text' ? '文本' : '视觉'}渠道`);
+    throw new AIError(
+      `没有可用的${channelType === 'text' ? '文本' : '视觉'}渠道`,
+      JSON.stringify(messages, null, 2)
+    );
   }
 
   // 按权重分组
   const weightGroups = groupByWeight(channels.results);
+
+  // 追踪第一次和最后一次失败的错误信息，用于最终报错和日志
+  // 第一次失败通常是根因（如 401 无效 key），最后一次失败可能是症状（如超时）
+  let firstError = '';
+  let firstRawRequest = '';
+  let firstRawResponse = '';
+  let lastError = '';
+  let lastRawRequest = '';
+  let lastRawResponse = '';
 
   // 从最高权重组开始尝试
   for (const group of weightGroups) {
@@ -128,8 +141,25 @@ export async function dispatchAI(opts: DispatchOptions): Promise<DispatchResult>
             content: parsedAnswer,
             channelName: channel.name as string,
             model: result.model,
+            rawRequest: result.rawRequest,
+            rawResponse: result.rawResponse,
           };
-        } catch {
+        } catch (err) {
+          // 记录错误信息（用于最终报错和日志排查）
+          const errMsg = err instanceof Error ? err.message : String(err);
+          const errReq = err instanceof AIError ? (err.rawRequest || '') : '';
+          const errResp = err instanceof AIError ? (err.rawResponse || '') : '';
+          // 第一次失败通常是根因，优先保留
+          if (!firstError) {
+            firstError = errMsg;
+            firstRawRequest = errReq;
+            firstRawResponse = errResp;
+          }
+          // 最后一次失败也保留（可能展示不同的失败模式）
+          lastError = errMsg;
+          lastRawRequest = errReq;
+          lastRawResponse = errResp;
+
           // 失败：fail_count++
           const newFailCount = ((key.fail_count as number) || 0) + 1;
 
@@ -154,6 +184,16 @@ export async function dispatchAI(opts: DispatchOptions): Promise<DispatchResult>
     // 此权重组所有渠道都失败，尝试下一个权重组
   }
 
-  // 所有渠道都失败
-  throw new Error('所有 AI 渠道均不可用');
+  // 所有渠道都失败，携带错误详情便于排查
+  // 优先使用第一个错误（根因），如果只有一个错误则 lastError === firstError
+  const errorMsg = firstError
+    ? (firstError === lastError
+      ? `所有 AI 渠道均不可用（${firstError}）`
+      : `所有 AI 渠道均不可用（首次错误：${firstError}；最后错误：${lastError}）`)
+    : '所有 AI 渠道均不可用';
+  throw new AIError(
+    errorMsg,
+    firstRawRequest || lastRawRequest || undefined,
+    firstRawResponse || lastRawResponse || undefined
+  );
 }

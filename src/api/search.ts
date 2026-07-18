@@ -3,7 +3,15 @@ import { json, notFound, error, options } from '../utils/response';
 import { requireApiKey } from '../auth/middleware';
 import { normalizeAndHash } from '../cache/normalize';
 import { dispatchAI } from '../ai/dispatcher';
+import { AIError } from '../ai/types';
 import { uuid } from '../utils/id';
+
+/** 截断字符串到指定长度，超长则追加截断标记 */
+function truncate(s: string | null | undefined, maxLen: number): string | null {
+  if (!s) return null;
+  if (s.length <= maxLen) return s;
+  return s.slice(0, maxLen) + '\n...[truncated]';
+}
 
 interface SearchBody {
   title?: string;
@@ -120,12 +128,13 @@ export async function searchHandler(request: Request, env: Env): Promise<Respons
       'UPDATE api_keys SET use_count = use_count + 1, last_used = datetime(\'now\') WHERE id = ?'
     ).bind(apiKeyData.id).run();
 
-    // 写日志
+    // 写日志（含 AI 请求/响应原始内容，方便排查）
     await env.DB.prepare(
-      `INSERT INTO search_logs (id, question, question_hash, found, from_cache, answer, ai_channel, ai_model, duration_ms, api_key_id)
-       VALUES (?, ?, ?, 1, 0, ?, ?, ?, ?, ?)`
+      `INSERT INTO search_logs (id, question, question_hash, found, from_cache, answer, ai_channel, ai_model, duration_ms, api_key_id, ai_request, ai_response)
+       VALUES (?, ?, ?, 1, 0, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
-      uuid(), title, hash, aiResult.content, aiResult.channelName, aiResult.model, duration, apiKeyData.id
+      uuid(), title, hash, aiResult.content, aiResult.channelName, aiResult.model, duration, apiKeyData.id,
+      truncate(aiResult.rawRequest, 4096), truncate(aiResult.rawResponse, 4096)
     ).run();
 
     return json({
@@ -137,17 +146,20 @@ export async function searchHandler(request: Request, env: Env): Promise<Respons
   } catch (err) {
     const duration = Date.now() - startTime;
     const errMsg = err instanceof Error ? err.message : String(err);
+    // 如果是 AI 调度错误，提取原始请求/响应用于日志排查
+    const aiRequest = err instanceof AIError ? (err.rawRequest || null) : null;
+    const aiResponse = err instanceof AIError ? (err.rawResponse || null) : null;
 
     // 更新 API Key 使用统计（即使失败也计数）
     await env.DB.prepare(
       'UPDATE api_keys SET use_count = use_count + 1, last_used = datetime(\'now\') WHERE id = ?'
     ).bind(apiKeyData.id).run();
 
-    // 写日志
+    // 写日志（含 AI 请求/响应原始内容，方便排查）
     await env.DB.prepare(
-      `INSERT INTO search_logs (id, question, question_hash, found, from_cache, duration_ms, api_key_id, error)
-       VALUES (?, ?, ?, 0, 0, ?, ?, ?)`
-    ).bind(uuid(), title, hash, duration, apiKeyData.id, errMsg).run();
+      `INSERT INTO search_logs (id, question, question_hash, found, from_cache, duration_ms, api_key_id, error, ai_request, ai_response)
+       VALUES (?, ?, ?, 0, 0, ?, ?, ?, ?, ?)`
+    ).bind(uuid(), title, hash, duration, apiKeyData.id, errMsg, truncate(aiRequest, 4096), truncate(aiResponse, 4096)).run();
 
     return notFound('未找到题目');
   }

@@ -21,8 +21,8 @@ export async function logsHandler(request: Request, env: Env, path: string): Pro
 /** 日志列表 */
 async function listLogs(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
-  const page = parseInt(url.searchParams.get('page') || '1', 10);
-  const size = parseInt(url.searchParams.get('size') || '20', 10);
+  const page = Math.max(1, parseInt(url.searchParams.get('page') || '1', 10));
+  const size = Math.min(100, Math.max(1, parseInt(url.searchParams.get('size') || '20', 10)));
   const found = url.searchParams.get('found');
   const fromCache = url.searchParams.get('from_cache');
   const offset = (page - 1) * size;
@@ -48,7 +48,7 @@ async function listLogs(request: Request, env: Env): Promise<Response> {
 
   // 列表
   const listResult = await env.DB.prepare(
-    `SELECT id, question, found, from_cache, answer, ai_channel, ai_model, duration_ms, error, created_at
+    `SELECT id, question, found, from_cache, answer, ai_channel, ai_model, duration_ms, error, created_at, ai_request, ai_response
      FROM search_logs ${where}
      ORDER BY created_at DESC LIMIT ? OFFSET ?`
   ).bind(...params, size, offset).all();

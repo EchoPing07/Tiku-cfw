@@ -1,0 +1,38 @@
+{
+  "name": "tiku-cfw",
+  "version": "1.0.0",
+  "description": "基于 Cloudflare Worker 的 AI 题库服务，兼容 OCS 网课助手",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:create": "wrangler d1 create tiku-cfw-db",
+    "db:migrate": "wrangler d1 execute tiku-cfw-db --file=migrations/0001_init.sql",
+    "db:migrate:local": "wrangler d1 execute tiku-cfw-db --local --file=migrations/0001_init.sql",
+    "db:seed": "wrangler d1 execute tiku-cfw-db --file=migrations/0002_seed.sql",
+    "db:seed:local": "wrangler d1 execute tiku-cfw-db --local --file=migrations/0002_seed.sql",
+    "typecheck": "tsc --noEmit",
+    "tail": "wrangler tail"
+  },
+  "keywords": [
+    "cloudflare-worker",
+    "tiku",
+    "ocs",
+    "ai",
+    "question-bank"
+  ],
+  "license": "MIT",
+  "author": "EchoPing",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/EchoPing07/Tiku-cfw.git"
+  },
+  "homepage": "https://github.com/EchoPing07/Tiku-cfw",
+  "bugs": {
+    "url": "https://github.com/EchoPing07/Tiku-cfw/issues"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250101.0",
+    "typescript": "^5.7.0",
+    "wrangler": "^3.99.0"
+  }
+}

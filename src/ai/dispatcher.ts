@@ -1,0 +1,159 @@
+import type { Env } from '../types/env';
+import type { ChatMessage, ChannelType, DispatchResult, AIChannelRow, AIChannelKeyRow } from './types';
+import { callOpenAI } from './openai-client';
+import { buildSystemPrompt, buildUserMessage, buildVisionMessage } from './prompt';
+import { parseAIAnswer } from './answer-parser';
+import type { QuestionType } from './types';
+
+interface DispatchOptions {
+  title: string;
+  type?: QuestionType;
+  options?: string;
+  images?: string[];
+  env: Env;
+}
+
+/** 读取设置值 */
+async function getSetting(db: D1Database, key: string, fallback: string): Promise<string> {
+  try {
+    const row = await db.prepare('SELECT value FROM settings WHERE key = ?').bind(key).first<{ value: string }>();
+    return row?.value || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+/** 按权重分组 */
+function groupByWeight<T extends { weight: number }>(items: T[]): T[][] {
+  const groups: Map<number, T[]> = new Map();
+  for (const item of items) {
+    if (!groups.has(item.weight)) groups.set(item.weight, []);
+    groups.get(item.weight)!.push(item);
+  }
+  // 按权重降序排列
+  return Array.from(groups.entries())
+    .sort((a, b) => b[0] - a[0])
+    .map(([, items]) => items);
+}
+
+/** 数组随机打乱 */
+function shuffle<T>(arr: T[]): T[] {
+  const result = [...arr];
+  for (let i = result.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [result[i], result[j]] = [result[j], result[i]];
+  }
+  return result;
+}
+
+/** 多渠道 AI 调度器 */
+export async function dispatchAI(opts: DispatchOptions): Promise<DispatchResult> {
+  const { title, type, options, images, env } = opts;
+
+  // 判断渠道类型
+  const channelType: ChannelType = images && images.length > 0 ? 'vision' : 'text';
+
+  // 读取设置
+  const timeoutStr = await getSetting(env.DB, 'ai_timeout', '30');
+  const timeout = parseInt(timeoutStr, 10) || 30;
+  const failThresholdStr = await getSetting(env.DB, 'key_fail_threshold', '3');
+  const failThreshold = parseInt(failThresholdStr, 10) || 3;
+  const customPrompt = await getSetting(env.DB, 'system_prompt', '');
+  const systemPrompt = buildSystemPrompt(customPrompt);
+
+  // 构建消息
+  let messages: ChatMessage[];
+  if (channelType === 'vision' && images && images.length > 0) {
+    messages = [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: buildVisionMessage(title, images, type, options) },
+    ];
+  } else {
+    messages = [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: buildUserMessage(title, type, options) },
+    ];
+  }
+
+  // 查询该类型下所有启用的渠道，按 weight DESC 排序
+  const channels = await env.DB.prepare(
+    'SELECT * FROM ai_channels WHERE type = ? AND enabled = 1 ORDER BY weight DESC'
+  ).bind(channelType).all<AIChannelRow>();
+
+  if (!channels.results || channels.results.length === 0) {
+    throw new Error(`没有可用的${channelType === 'text' ? '文本' : '视觉'}渠道`);
+  }
+
+  // 按权重分组
+  const weightGroups = groupByWeight(channels.results);
+
+  // 从最高权重组开始尝试
+  for (const group of weightGroups) {
+    // 同权重组内随机打乱
+    const shuffledChannels = shuffle(group);
+
+    for (const channel of shuffledChannels) {
+      // 查询该渠道下启用的 keys，按 use_count ASC 排序（最少使用优先）
+      const keysResult = await env.DB.prepare(
+        'SELECT * FROM ai_channel_keys WHERE channel_id = ? AND enabled = 1 ORDER BY use_count ASC'
+      ).bind(channel.id).all<AIChannelKeyRow>();
+
+      const keys = keysResult.results;
+      if (!keys || keys.length === 0) continue; // 此渠道无可用 key，跳过
+
+      // 依次尝试每个 key
+      for (const key of keys) {
+        try {
+          const result = await callOpenAI({
+            messages,
+            baseUrl: channel.base_url as string,
+            apiKey: key.api_key as string,
+            model: channel.model as string,
+            temperature: channel.temperature as number,
+            maxTokens: channel.max_tokens as number,
+            timeout,
+          });
+
+          // 成功：use_count++，fail_count=0，last_used=now
+          await env.DB.prepare(
+            `UPDATE ai_channel_keys
+             SET use_count = use_count + 1, fail_count = 0, last_used = datetime('now')
+             WHERE id = ?`
+          ).bind(key.id).run();
+
+          // 解析答案
+          const parsedAnswer = parseAIAnswer(result.content, type);
+
+          return {
+            content: parsedAnswer,
+            channelName: channel.name as string,
+            model: result.model,
+          };
+        } catch {
+          // 失败：fail_count++
+          const newFailCount = ((key.fail_count as number) || 0) + 1;
+
+          if (newFailCount >= failThreshold) {
+            // 达到阈值，禁用此 key
+            await env.DB.prepare(
+              'UPDATE ai_channel_keys SET fail_count = ?, enabled = 0 WHERE id = ?'
+            ).bind(newFailCount, key.id).run();
+          } else {
+            // 未达阈值，仅增加失败计数
+            await env.DB.prepare(
+              'UPDATE ai_channel_keys SET fail_count = ? WHERE id = ?'
+            ).bind(newFailCount, key.id as string).run();
+          }
+
+          // 继续尝试下一个 key
+          continue;
+        }
+      }
+      // 此渠道所有 key 都失败，尝试下一个渠道
+    }
+    // 此权重组所有渠道都失败，尝试下一个权重组
+  }
+
+  // 所有渠道都失败
+  throw new Error('所有 AI 渠道均不可用');
+}

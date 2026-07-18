@@ -1,0 +1,214 @@
+# Tiku-cfw
+
+> 基于 Cloudflare Worker 的 AI 题库服务，兼容 [OCS 网课助手](https://docs.ocsjs.com) AnswererWrapper 规范。
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-F38020?logo=cloudflare&logoColor=white)](https://workers.cloudflare.com/)
+
+## 简介
+
+Tiku-cfw 是一个部署在 Cloudflare Workers 上的 AI 题库服务。它接收来自 OCS 网课助手脚本的搜题请求，先查询本地缓存（D1 数据库），未命中时调用 AI 大模型生成答案并自动缓存，避免重复消耗 Token。
+
+### 核心特性
+
+- 🔍 **OCS 兼容** — 搜题接口完全兼容 OCS `AnswererWrapper` 规范，配置即用
+- 🤖 **AI 多渠道** — 支持文本/视觉两类模型，多渠道权重调度，最少使用优先轮询，失败自动禁用降级
+- 💾 **智能缓存** — 题目归一化后精确匹配，命中缓存秒回，永不过期
+- 🖼️ **图片支持** — 带图题目自动路由到视觉模型渠道
+- 📊 **Web 管理面板** — 仪表盘统计、题库管理、密钥管理、AI 渠道配置、搜索日志
+- 🌓 **明暗主题** — 跟随系统或手动切换
+- 🚀 **零成本部署** — Cloudflare Workers 免费额度 + D1 免费额度 + GitHub Actions 自动部署
+
+## 技术栈
+
+| 层级 | 技术 |
+|------|------|
+| 运行时 | Cloudflare Workers |
+| 数据库 | Cloudflare D1 (SQLite) |
+| AI | OpenAI 兼容接口 |
+| 语言 | TypeScript |
+| 前端 | Tailwind CSS + 原生 JS SPA |
+| 部署 | GitHub Actions → Cloudflare Workers |
+
+## 部署
+
+### 方式一：GitHub 自动部署（推荐）
+
+全程在浏览器中操作，无需安装任何命令行工具。
+
+#### 1. Fork / 使用此模板
+
+点击 GitHub 仓库的 **Use this template** 或 **Fork** 创建自己的仓库。
+
+#### 2. 创建 D1 数据库
+
+登录 [Cloudflare 控制台](https://dash.cloudflare.com/) → **Workers & Pages** → **D1** → **Create database**，名称填 `tiku-cfw-db`，创建后复制 **Database ID**。
+
+#### 3. 创建 API Token
+
+访问 [API Tokens](https://dash.cloudflare.com/profile/api-tokens) → **Create Token** → 选择 **Edit Cloudflare Workers** 模板 → 权限中添加 **D1** → **Edit** → 创建后复制。
+
+#### 4. 获取 Account ID
+
+在 Cloudflare 控制台首页右侧栏可以看到 **Account ID**。
+
+#### 5. 设置 GitHub Secrets
+
+在仓库 **Settings** → **Secrets and variables** → **Actions** → **New repository secret**：
+
+| Secret 名称 | 值 |
+|---|---|
+| `CLOUDFLARE_API_TOKEN` | 步骤 3 的 Token |
+| `CLOUDFLARE_ACCOUNT_ID` | 步骤 4 的 Account ID |
+| `D1_DATABASE_ID` | 步骤 2 的 Database ID |
+
+#### 6. 运行数据库迁移
+
+在仓库 **Actions** 标签页 → 选择 **Migrate** → **Run workflow** → 等待执行完成。
+
+#### 7. 部署
+
+推送代码到 `main` 分支，**Deploy** workflow 自动触发。也可以在 **Actions** → **Deploy** → **Run workflow** 手动触发。
+
+#### 8. 设置生产密钥（可选但建议）
+
+在 Cloudflare 控制台 → Worker 详情 → **Settings** → **Variables and Secrets**：
+
+| 变量名 | 类型 | 说明 |
+|---|---|---|
+| `ADMIN_PASSWORD` | Secret | 管理面板登录密码 |
+| `JWT_SECRET` | Secret | JWT 签名密钥（随机字符串） |
+
+不设置则使用默认值（`password` / `change-me-in-production`）。
+
+#### 9. 访问
+
+部署成功后访问 `https://tiku-cfw.<your-subdomain>.workers.dev`，用密码登录管理面板。
+
+---
+
+### 方式二：命令行部署
+
+```bash
+git clone https://github.com/EchoPing07/Tiku-cfw.git
+cd Tiku-cfw
+npm install
+npx wrangler login
+
+# 创建 D1 数据库，将返回的 database_id 填入 wrangler.toml
+npx wrangler d1 create tiku-cfw-db
+
+# 建表
+npx wrangler d1 execute tiku-cfw-db --remote --file=migrations/0001_init.sql
+npx wrangler d1 execute tiku-cfw-db --remote --file=migrations/0002_seed.sql
+
+# 部署
+npx wrangler deploy
+
+# 设置密钥
+npx wrangler secret put ADMIN_PASSWORD
+npx wrangler secret put JWT_SECRET
+```
+
+---
+
+### 本地开发
+
+```bash
+npm install
+npm run db:migrate:local   # 本地建表
+npm run db:seed:local      # 写入初始数据
+npm run dev                 # 启动开发服务器 → http://localhost:8787
+```
+
+默认密码 `password`。
+
+---
+
+## 使用指南
+
+### 1. 配置 AI 渠道
+
+在管理面板「AI 渠道」页面：
+1. 创建渠道（填写 API 地址、模型名、类型 text/vision、权重）
+2. 在渠道下添加 API Key（支持多 Key 轮询）
+3. 启用渠道
+
+### 2. 创建 API 密钥
+
+在管理面板「API 密钥」页面创建密钥 → 点击「复制 OCS 配置」→ 获得完整的 OCS 题库配置 JSON。
+
+### 3. OCS 对接
+
+将复制的 JSON 粘贴到 OCS 脚本的题库配置中即可。OCS 会自动调用你的 Worker 搜题。
+
+---
+
+## API 参考
+
+### 搜题接口
+
+```
+POST /api/search
+Authorization: Bearer <api-key>
+Content-Type: application/json
+
+{
+  "title": "题目内容",
+  "type": "single",            // 可选: single/multiple/judgement/completion
+  "options": "A. xxx\nB. xxx", // 可选
+  "images": ["https://..."]     // 可选，有图走视觉模型
+}
+```
+
+### 管理面板 API
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/admin/login` | 登录 |
+| GET | `/api/admin/dashboard` | 仪表盘 |
+| GET/POST | `/api/admin/questions` | 题目列表/创建 |
+| PUT/DELETE | `/api/admin/questions/:id` | 编辑/删除 |
+| POST | `/api/admin/questions/import` | 批量导入 |
+| GET | `/api/admin/questions/export` | 导出 |
+| GET/POST | `/api/admin/keys` | API 密钥管理 |
+| PUT/DELETE | `/api/admin/keys/:id` | 编辑/删除 |
+| GET/POST | `/api/admin/channels` | AI 渠道管理 |
+| PUT/DELETE | `/api/admin/channels/:id` | 编辑/删除渠道 |
+| GET/POST | `/api/admin/channels/:id/keys` | 渠道密钥管理 |
+| PUT/DELETE | `/api/admin/channel-keys/:id` | 编辑/删除密钥 |
+| POST | `/api/admin/channel-keys/:id/reset` | 重置失败计数 |
+| GET/PUT | `/api/admin/settings` | 系统设置 |
+| GET/DELETE | `/api/admin/logs` | 搜索日志 |
+| GET | `/api/health` | 健康检查 |
+
+完整接口规范参考 [OCS-API-参考文档.md](../OCS-API-参考文档.md)。
+
+---
+
+## 项目结构
+
+```
+Tiku-cfw/
+├── .github/workflows/
+│   ├── deploy.yml              # 推送 main 自动部署
+│   └── migrate.yml             # 手动触发数据库迁移
+├── src/
+│   ├── index.ts                # Worker 入口，路由分发
+│   ├── api/                    # 搜题接口 + 健康检查
+│   ├── admin/                  # 管理后台 API（7 个模块）
+│   ├── ai/                     # AI 多渠道调度器
+│   ├── cache/                  # 题目归一化 + 哈希
+│   ├── auth/                   # JWT + API Key 认证
+│   ├── types/                  # 类型定义
+│   ├── utils/                  # 工具函数
+│   └── web/index.html          # Web 管理面板 SPA
+├── migrations/                 # D1 数据库迁移 SQL
+├── wrangler.toml               # Cloudflare 配置
+├── package.json
+└── LICENSE
+```
+
+## License
+
+[MIT](LICENSE) © 2026 EchoPing

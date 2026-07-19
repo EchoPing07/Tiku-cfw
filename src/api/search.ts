@@ -129,13 +129,23 @@ export async function searchHandler(request: Request, env: Env): Promise<Respons
     ).bind(apiKeyData.id).run();
 
     // 写日志（含 AI 请求/响应原始内容，方便排查）
-    await env.DB.prepare(
-      `INSERT INTO search_logs (id, question, question_hash, found, from_cache, answer, ai_channel, ai_model, duration_ms, api_key_id, ai_request, ai_response)
-       VALUES (?, ?, ?, 1, 0, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(
-      uuid(), title, hash, aiResult.content, aiResult.channelName, aiResult.model, duration, apiKeyData.id,
-      truncate(aiResult.rawRequest, 4096), truncate(aiResult.rawResponse, 4096)
-    ).run();
+    // 如果迁移 0003 未执行，ai_request/ai_response 列不存在，fallback 到无新列写入
+    try {
+      await env.DB.prepare(
+        `INSERT INTO search_logs (id, question, question_hash, found, from_cache, answer, ai_channel, ai_model, duration_ms, api_key_id, ai_request, ai_response)
+         VALUES (?, ?, ?, 1, 0, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(
+        uuid(), title, hash, aiResult.content, aiResult.channelName, aiResult.model, duration, apiKeyData.id,
+        truncate(aiResult.rawRequest, 4096), truncate(aiResult.rawResponse, 4096)
+      ).run();
+    } catch {
+      await env.DB.prepare(
+        `INSERT INTO search_logs (id, question, question_hash, found, from_cache, answer, ai_channel, ai_model, duration_ms, api_key_id)
+         VALUES (?, ?, ?, 1, 0, ?, ?, ?, ?, ?)`
+      ).bind(
+        uuid(), title, hash, aiResult.content, aiResult.channelName, aiResult.model, duration, apiKeyData.id
+      ).run();
+    }
 
     return json({
       code: 1,
@@ -156,10 +166,18 @@ export async function searchHandler(request: Request, env: Env): Promise<Respons
     ).bind(apiKeyData.id).run();
 
     // 写日志（含 AI 请求/响应原始内容，方便排查）
-    await env.DB.prepare(
-      `INSERT INTO search_logs (id, question, question_hash, found, from_cache, duration_ms, api_key_id, error, ai_request, ai_response)
-       VALUES (?, ?, ?, 0, 0, ?, ?, ?, ?, ?)`
-    ).bind(uuid(), title, hash, duration, apiKeyData.id, errMsg, truncate(aiRequest, 4096), truncate(aiResponse, 4096)).run();
+    // 如果迁移 0003 未执行，ai_request/ai_response 列不存在，fallback 到无新列写入
+    try {
+      await env.DB.prepare(
+        `INSERT INTO search_logs (id, question, question_hash, found, from_cache, duration_ms, api_key_id, error, ai_request, ai_response)
+         VALUES (?, ?, ?, 0, 0, ?, ?, ?, ?, ?)`
+      ).bind(uuid(), title, hash, duration, apiKeyData.id, errMsg, truncate(aiRequest, 4096), truncate(aiResponse, 4096)).run();
+    } catch {
+      await env.DB.prepare(
+        `INSERT INTO search_logs (id, question, question_hash, found, from_cache, duration_ms, api_key_id, error)
+         VALUES (?, ?, ?, 0, 0, ?, ?, ?)`
+      ).bind(uuid(), title, hash, duration, apiKeyData.id, errMsg).run();
+    }
 
     return notFound('未找到题目');
   }

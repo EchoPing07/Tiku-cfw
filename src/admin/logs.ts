@@ -46,12 +46,22 @@ async function listLogs(request: Request, env: Env): Promise<Response> {
     `SELECT COUNT(*) as count FROM search_logs ${where}`
   ).bind(...params).first<{ count: number }>();
 
-  // 列表
-  const listResult = await env.DB.prepare(
-    `SELECT id, question, found, from_cache, answer, ai_channel, ai_model, duration_ms, error, created_at, ai_request, ai_response
-     FROM search_logs ${where}
-     ORDER BY created_at DESC LIMIT ? OFFSET ?`
-  ).bind(...params, size, offset).all();
+  // 列表（含 AI 请求/响应原始内容，方便排查）
+  // 如果迁移 0003 未执行，ai_request/ai_response 列不存在，fallback 到无新列查询
+  let listResult;
+  try {
+    listResult = await env.DB.prepare(
+      `SELECT id, question, found, from_cache, answer, ai_channel, ai_model, duration_ms, error, created_at, ai_request, ai_response
+       FROM search_logs ${where}
+       ORDER BY created_at DESC LIMIT ? OFFSET ?`
+    ).bind(...params, size, offset).all();
+  } catch {
+    listResult = await env.DB.prepare(
+      `SELECT id, question, found, from_cache, answer, ai_channel, ai_model, duration_ms, error, created_at
+       FROM search_logs ${where}
+       ORDER BY created_at DESC LIMIT ? OFFSET ?`
+    ).bind(...params, size, offset).all();
+  }
 
   return json({
     total: countRow?.count || 0,

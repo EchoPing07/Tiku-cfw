@@ -28,44 +28,44 @@ export default {
     try {
       // ===== 公开 API =====
       if (path === '/api/health') {
-        return healthHandler(request, env);
+        return await healthHandler(request, env);
       }
 
       if (path === '/api/search') {
-        return searchHandler(request, env);
+        return await searchHandler(request, env);
       }
 
       // ===== 管理后台 API =====
       if (path === '/api/admin/login') {
-        return adminLoginHandler(request, env);
+        return await adminLoginHandler(request, env);
       }
 
       if (path === '/api/admin/verify') {
-        return adminVerifyHandler(request, env);
+        return await adminVerifyHandler(request, env);
       }
 
       if (path === '/api/admin/dashboard') {
-        return dashboardHandler(request, env);
+        return await dashboardHandler(request, env);
       }
 
       if (path.startsWith('/api/admin/questions')) {
-        return questionsHandler(request, env, path);
+        return await questionsHandler(request, env, path);
       }
 
       if (path.startsWith('/api/admin/keys')) {
-        return keysHandler(request, env, path);
+        return await keysHandler(request, env, path);
       }
 
       if (path.startsWith('/api/admin/channels') || path.startsWith('/api/admin/channel-keys')) {
-        return channelsHandler(request, env, path);
+        return await channelsHandler(request, env, path);
       }
 
       if (path.startsWith('/api/admin/settings')) {
-        return settingsHandler(request, env, path);
+        return await settingsHandler(request, env, path);
       }
 
       if (path.startsWith('/api/admin/logs')) {
-        return logsHandler(request, env, path);
+        return await logsHandler(request, env, path);
       }
 
       // ===== 前端面板 =====

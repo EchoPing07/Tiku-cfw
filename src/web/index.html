@@ -13,6 +13,8 @@
   </script>
   <style>
     * { -webkit-tap-highlight-color: transparent; }
+    /* 防止 Tailwind CDN 加载前 hidden 类失效导致图标/文本同时可见 */
+    .hidden { display: none !important; }
     body { font-feature-settings: "kern"; -webkit-font-smoothing: antialiased; }
     ::-webkit-scrollbar { width: 6px; height: 6px; }
     ::-webkit-scrollbar-track { background: transparent; }
@@ -29,6 +31,14 @@
     input[type="checkbox"] { accent-color:#111827; }
     .dark input[type="checkbox"] { accent-color:#f3f4f6; }
   </style>
+  <script>
+    // 防止主题闪烁：在页面渲染前应用深色模式类
+    (function(){
+      var t=localStorage.getItem('tiku-theme')||'auto';
+      var d=t==='dark'||(t==='auto'&&window.matchMedia('(prefers-color-scheme: dark)').matches);
+      if(d)document.documentElement.classList.add('dark');
+    })();
+  </script>
 </head>
 <body class="bg-white dark:bg-neutral-950 text-gray-900 dark:text-gray-100 theme-transition min-h-screen">
 
@@ -43,7 +53,7 @@
       <div class="inline-flex items-center justify-center w-12 h-12 border border-gray-300 dark:border-gray-700 rounded-lg mb-4">
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="text-gray-700 dark:text-gray-300"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg>
       </div>
-      <h1 class="text-xl font-semibold tracking-tight">Tiku-cfw</h1>
+      <h1 class="site-name text-xl font-semibold tracking-tight">Tiku-cfw</h1>
       <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">题库管理面板</p>
     </div>
     <form id="login-form" class="space-y-4">
@@ -64,7 +74,7 @@
       <div class="inline-flex items-center justify-center w-7 h-7 border border-gray-300 dark:border-gray-700 rounded mr-2.5">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-gray-700 dark:text-gray-300"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg>
       </div>
-      <span class="text-sm font-semibold tracking-tight">Tiku-cfw</span>
+      <span class="site-name text-sm font-semibold tracking-tight">Tiku-cfw</span>
     </div>
     <nav class="flex-1 overflow-y-auto py-3 px-2.5 space-y-0.5">
       <a href="#/dashboard" class="nav-item flex items-center px-3 py-2 rounded-md text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-900 hover:text-gray-900 dark:hover:text-gray-100 transition-colors" data-route="dashboard"><svg class="w-4 h-4 mr-2.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg><span>仪表盘</span></a>
@@ -78,7 +88,7 @@
       <button onclick="toggleTheme()" class="w-full flex items-center px-3 py-2 rounded-md text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-900 transition-colors">
         <svg class="theme-icon-light w-4 h-4 mr-2.5 hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
         <svg class="theme-icon-dark w-4 h-4 mr-2.5 hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
-        <span class="theme-text-light">浅色模式</span><span class="theme-text-dark hidden">深色模式</span>
+        <span class="theme-text-light hidden">浅色模式</span><span class="theme-text-dark hidden">深色模式</span>
       </button>
       <button onclick="logout()" class="w-full flex items-center px-3 py-2 rounded-md text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-900 transition-colors"><svg class="w-4 h-4 mr-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg><span>退出登录</span></button>
     </div>
@@ -122,9 +132,16 @@ const API = {
 // ============================================================
 function getStoredTheme(){return localStorage.getItem('tiku-theme')||'auto';}
 function applyTheme(t){const d=t==='dark'||(t==='auto'&&window.matchMedia('(prefers-color-scheme: dark)').matches);document.documentElement.classList.toggle('dark',d);document.querySelectorAll('.theme-icon-light').forEach(e=>e.classList.toggle('hidden',!d));document.querySelectorAll('.theme-icon-dark').forEach(e=>e.classList.toggle('hidden',d));document.querySelectorAll('.theme-text-light').forEach(e=>e.classList.toggle('hidden',!d));document.querySelectorAll('.theme-text-dark').forEach(e=>e.classList.toggle('hidden',!d));}
-function toggleTheme(){const c=getStoredTheme();const d=document.documentElement.classList.contains('dark');const n=d?'light':'dark';localStorage.setItem('tiku-theme',n);applyTheme(n);}
+function toggleTheme(){const d=document.documentElement.classList.contains('dark');const n=d?'light':'dark';localStorage.setItem('tiku-theme',n);applyTheme(n);}
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change',()=>{if(getStoredTheme()==='auto')applyTheme('auto');});
 applyTheme(getStoredTheme());
+
+// ============================================================
+// 站点名称管理
+// ============================================================
+let siteName=localStorage.getItem('tiku-site-name')||'Tiku-cfw';
+function applySiteName(name){siteName=(name||'Tiku-cfw').trim()||'Tiku-cfw';localStorage.setItem('tiku-site-name',siteName);document.title=siteName+' 管理面板';document.querySelectorAll('.site-name').forEach(e=>e.textContent=siteName);}
+applySiteName(siteName);
 
 // ============================================================
 // 路由
@@ -221,7 +238,7 @@ async function createKey(){const name=document.getElementById('k-name').value;co
 function showEditKeyModal(id){const k=_keysData.find(x=>x.id===id)||{};showModal('编辑密钥','<div class="space-y-4"><div><label class="block text-sm font-medium mb-1.5">备注名</label><input type="text" id="k-name" value="'+esc(k.name||'')+'" class="w-full px-3 py-2 bg-transparent border border-gray-300 dark:border-gray-700 rounded-lg text-sm focus:border-gray-900 dark:focus:border-gray-100 transition-colors"></div><div><label class="block text-sm font-medium mb-1.5">密钥</label><input type="text" value="'+esc(k.key)+'" readonly class="w-full px-3 py-2 bg-gray-50 dark:bg-neutral-900 border border-gray-200 dark:border-gray-800 rounded-lg text-sm font-mono text-gray-500"></div><div class="flex items-center gap-2"><input type="checkbox" id="k-enabled" '+(k.enabled?'checked':'')+'><label for="k-enabled" class="text-sm">启用</label></div><div class="flex justify-end gap-2 pt-2"><button onclick="closeModal()" class="px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg text-sm hover:bg-gray-50 dark:hover:bg-gray-900">取消</button><button onclick="updateKey(\''+k.id+'\')" class="px-4 py-2 bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 rounded-lg text-sm font-medium">保存</button></div></div>');}
 async function updateKey(id){const name=document.getElementById('k-name').value;const enabled=document.getElementById('k-enabled').checked?1:0;try{await API.put('/api/admin/keys/'+id,{name,enabled});toast('已保存','success');closeModal();navigate();}catch(e){toast(e.message,'error');}}
 async function delKey(id){if(!confirm('确认删除？'))return;try{await API.del('/api/admin/keys/'+id);toast('已删除','info');navigate();}catch(e){toast(e.message,'error');}}
-function copyOCSConfig(key){const origin=location.origin;const config=JSON.stringify([{name:"Tiku-cfw",homepage:origin,url:origin+"/api/search",method:"post",contentType:"json",type:"fetch",headers:{"Content-Type":"application/json","Authorization":"Bearer "+key},data:{"title":"${title}","type":"${type}","options":"${options}"},handler:"return (res)=> res.code === 1 ? [res.question, res.answer] : undefined"}],null,2);copyText(config);toast('OCS 配置已复制','success');}
+function copyOCSConfig(key){const origin=location.origin;const config=JSON.stringify([{name:siteName,homepage:origin,url:origin+"/api/search",method:"post",contentType:"json",type:"fetch",headers:{"Content-Type":"application/json","Authorization":"Bearer "+key},data:{"title":"${title}","type":"${type}","options":"${options}"},handler:"return (res)=> res.code === 1 ? [res.question, res.answer] : undefined"}],null,2);copyText(config);toast('OCS 配置已复制','success');}
 
 // ============================================================
 // AI 渠道
@@ -282,7 +299,7 @@ async function renderSettings(){
 }
 async function savePrompt(){const system_prompt=document.getElementById('s-prompt').value;try{await API.put('/api/admin/settings',{system_prompt});toast('提示词已保存','success');}catch(e){toast(e.message,'error');}}
 async function saveSettings(){const log_retention_days=document.getElementById('s-logdays').value;const ai_timeout=document.getElementById('s-timeout').value;const key_fail_threshold=document.getElementById('s-failthreshold').value;const cors_origins=document.getElementById('s-cors').value;try{await API.put('/api/admin/settings',{log_retention_days,ai_timeout,key_fail_threshold,cors_origins});toast('设置已保存','success');}catch(e){toast(e.message,'error');}}
-async function saveSiteName(){const site_name=document.getElementById('s-sitename').value;try{await API.put('/api/admin/settings',{site_name});toast('已保存','success');}catch(e){toast(e.message,'error');}}
+async function saveSiteName(){const site_name=document.getElementById('s-sitename').value;try{await API.put('/api/admin/settings',{site_name});applySiteName(site_name);toast('已保存','success');}catch(e){toast(e.message,'error');}}
 
 // ============================================================
 // 工具函数
@@ -293,6 +310,8 @@ function fmtTime(s){if(!s)return'';try{const d=new Date(s+'Z');const now=new Dat
 // ============================================================
 // 启动
 // ============================================================
+// 已登录时从服务端同步最新站点名称
+if(isLoggedIn()){API.get('/api/admin/settings').then(d=>{applySiteName((d.settings||{}).site_name);}).catch(()=>{});}
 navigate();
 </script>
 </body>

@@ -79,6 +79,7 @@ async function clearLogs(request: Request, env: Env): Promise<Response> {
   if (daysStr) {
     // 按天数清理
     const days = parseInt(daysStr, 10);
+    if (!Number.isFinite(days) || days < 0) return error('days 无效');
     await env.DB.prepare(
       `DELETE FROM search_logs WHERE created_at < datetime('now', ?)`
     ).bind(`-${days} days`).run();

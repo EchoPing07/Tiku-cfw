@@ -1,13 +1,8 @@
-import { corsHeaders } from './cors';
-
-/** JSON 响应 */
+/** JSON 响应（CORS 由 index.ts 顶层 applyCors 统一注入） */
 export function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
-    headers: {
-      'Content-Type': 'application/json',
-      ...corsHeaders,
-    },
+    headers: { 'Content-Type': 'application/json' },
   });
 }
 
@@ -31,7 +26,7 @@ export function unauthorized(msg = '未授权'): Response {
   return json({ code: -1, msg }, 401);
 }
 
-/** OPTIONS 预检响应 */
+/** OPTIONS 预检响应（CORS 由顶层 applyCors 注入） */
 export function options(): Response {
-  return new Response(null, { status: 204, headers: corsHeaders });
+  return new Response(null, { status: 204 });
 }

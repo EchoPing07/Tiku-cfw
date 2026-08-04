@@ -2,6 +2,7 @@ import type { Env } from '../types/env';
 import { json, error, options } from '../utils/response';
 import { requireAuth } from '../auth/middleware';
 import { refreshCorsConfig } from '../utils/cors';
+import { parseJsonBody } from '../utils/request';
 
 /** 系统设置路由 */
 export async function settingsHandler(request: Request, env: Env, path: string): Promise<Response> {
@@ -35,7 +36,9 @@ async function getSettings(env: Env): Promise<Response> {
 
 /** 批量更新设置 */
 async function updateSettings(request: Request, env: Env): Promise<Response> {
-  const body = await request.json() as Record<string, string>;
+  const parsed = await parseJsonBody<Record<string, string>>(request);
+  if (!parsed.ok) return parsed.response;
+  const body = parsed.data;
 
   for (const [key, value] of Object.entries(body)) {
     await env.DB.prepare(

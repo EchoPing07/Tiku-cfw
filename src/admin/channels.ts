@@ -2,6 +2,7 @@ import type { Env } from '../types/env';
 import { json, error, options } from '../utils/response';
 import { requireAuth } from '../auth/middleware';
 import { uuid } from '../utils/id';
+import { parseJsonBody } from '../utils/request';
 
 /** AI 渠道管理路由 */
 export async function channelsHandler(request: Request, env: Env, path: string): Promise<Response> {
@@ -79,62 +80,65 @@ async function getChannel(env: Env, id: string): Promise<Response> {
 }
 
 async function createChannel(request: Request, env: Env): Promise<Response> {
-  const body = await request.json() as {
-    name: string;
-    type: string;
-    base_url: string;
-    model: string;
-    weight?: number;
-    temperature?: number;
-    max_tokens?: number;
-  };
+  const parsed = await parseJsonBody<{
+    name: string; type: string; base_url: string; model: string;
+    weight?: number; temperature?: number; max_tokens?: number;
+  }>(request);
+  if (!parsed.ok) return parsed.response;
+  const body = parsed.data;
 
   if (!body.name || !body.type || !body.base_url || !body.model) {
     return error('缺少必填字段');
   }
-
   if (!['text', 'vision'].includes(body.type)) {
     return error('类型必须为 text 或 vision');
   }
+  const weight = body.weight ?? 1;
+  const temperature = body.temperature ?? 0.3;
+  const maxTokens = body.max_tokens ?? 2000;
+  if (!Number.isFinite(weight) || weight < 1) return error('weight 必须 >= 1');
+  if (!Number.isFinite(temperature) || temperature < 0 || temperature > 2) return error('temperature 必须在 0~2 之间');
+  if (!Number.isFinite(maxTokens) || maxTokens < 1) return error('max_tokens 必须 >= 1');
 
   const id = uuid();
   await env.DB.prepare(
     `INSERT INTO ai_channels (id, name, type, base_url, model, weight, temperature, max_tokens, enabled)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`
-  ).bind(
-    id, body.name, body.type, body.base_url, body.model,
-    body.weight || 1, body.temperature ?? 0.3, body.max_tokens || 2000
-  ).run();
+  ).bind(id, body.name, body.type, body.base_url, body.model, weight, temperature, maxTokens).run();
 
   return json({ id, msg: '创建成功' });
 }
 
 async function updateChannel(request: Request, env: Env, id: string): Promise<Response> {
-  const body = await request.json() as {
-    name?: string;
-    type?: string;
-    base_url?: string;
-    model?: string;
-    weight?: number;
-    temperature?: number;
-    max_tokens?: number;
-    enabled?: number;
-  };
+  const parsed = await parseJsonBody<{
+    name?: string; type?: string; base_url?: string; model?: string;
+    weight?: number; temperature?: number; max_tokens?: number; enabled?: number;
+  }>(request);
+  if (!parsed.ok) return parsed.response;
+  const body = parsed.data;
 
   const existing = await env.DB.prepare('SELECT id FROM ai_channels WHERE id = ?').bind(id).first();
   if (!existing) return error('渠道不存在', 404);
 
-  await env.DB.prepare(
-    `UPDATE ai_channels SET
-       name = ?, type = ?, base_url = ?, model = ?,
-       weight = ?, temperature = ?, max_tokens = ?, enabled = ?,
-       updated_at = datetime('now')
-     WHERE id = ?`
-  ).bind(
-    body.name || '', body.type || 'text', body.base_url || '', body.model || '',
-    body.weight ?? 1, body.temperature ?? 0.3, body.max_tokens || 2000,
-    body.enabled ?? 1, id
-  ).run();
+  if (body.type !== undefined && !['text', 'vision'].includes(body.type)) return error('类型必须为 text 或 vision');
+  if (body.weight !== undefined && (!Number.isFinite(body.weight) || body.weight < 1)) return error('weight 必须 >= 1');
+  if (body.temperature !== undefined && (!Number.isFinite(body.temperature) || body.temperature < 0 || body.temperature > 2)) return error('temperature 必须在 0~2 之间');
+  if (body.max_tokens !== undefined && (!Number.isFinite(body.max_tokens) || body.max_tokens < 1)) return error('max_tokens 必须 >= 1');
+
+  // 按字段存在性更新，避免部分 PUT 清空字段
+  const sets: string[] = ["updated_at = datetime('now')"];
+  const params: unknown[] = [];
+  if (body.name !== undefined) { sets.push('name = ?'); params.push(body.name); }
+  if (body.type !== undefined) { sets.push('type = ?'); params.push(body.type); }
+  if (body.base_url !== undefined) { sets.push('base_url = ?'); params.push(body.base_url); }
+  if (body.model !== undefined) { sets.push('model = ?'); params.push(body.model); }
+  if (body.weight !== undefined) { sets.push('weight = ?'); params.push(body.weight); }
+  if (body.temperature !== undefined) { sets.push('temperature = ?'); params.push(body.temperature); }
+  if (body.max_tokens !== undefined) { sets.push('max_tokens = ?'); params.push(body.max_tokens); }
+  if (body.enabled !== undefined) { sets.push('enabled = ?'); params.push(body.enabled); }
+  params.push(id);
+
+  await env.DB.prepare(`UPDATE ai_channels SET ${sets.join(', ')} WHERE id = ?`).bind(...params).run();
 
   return json({ msg: '更新成功' });
 }
@@ -167,10 +171,9 @@ async function listChannelKeys(env: Env, channelId: string): Promise<Response> {
 }
 
 async function createChannelKey(request: Request, env: Env, channelId: string): Promise<Response> {
-  const body = await request.json() as {
-    api_key: string;
-    name?: string;
-  };
+  const parsed = await parseJsonBody<{ api_key: string; name?: string }>(request);
+  if (!parsed.ok) return parsed.response;
+  const body = parsed.data;
 
   if (!body.api_key) return error('API Key 不能为空');
 
@@ -187,11 +190,9 @@ async function createChannelKey(request: Request, env: Env, channelId: string): 
 }
 
 async function updateChannelKey(request: Request, env: Env, id: string): Promise<Response> {
-  const body = await request.json() as {
-    api_key?: string;
-    name?: string;
-    enabled?: number;
-  };
+  const parsed = await parseJsonBody<{ api_key?: string; name?: string; enabled?: number }>(request);
+  if (!parsed.ok) return parsed.response;
+  const body = parsed.data;
 
   const existing = await env.DB.prepare('SELECT id FROM ai_channel_keys WHERE id = ?').bind(id).first();
   if (!existing) return error('密钥不存在', 404);

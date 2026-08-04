@@ -44,6 +44,14 @@ export async function verifyJWT(token: string, env: Env): Promise<boolean> {
     const parts = token.split('.');
     if (parts.length !== 3) return false;
 
+    // 校验算法，防止 alg 混淆/none 攻击
+    try {
+      const header = JSON.parse(base64UrlDecode(parts[0]));
+      if (header.alg !== 'HS256') return false;
+    } catch {
+      return false;
+    }
+
     const expectedSig = await sign(`${parts[0]}.${parts[1]}`, env.JWT_SECRET);
     if (expectedSig !== parts[2]) return false;
 

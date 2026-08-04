@@ -23,3 +23,7 @@ binding = "ASSETS"
 [dev]
 port = 8787
 local_protocol = "http"
+
+# 定时任务：每日清理过期搜索日志（按 log_retention_days 设置，0=永久）
+[triggers]
+crons = ["17 3 * * *"]

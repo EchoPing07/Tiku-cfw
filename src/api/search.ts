@@ -110,7 +110,8 @@ export async function searchHandler(request: Request, env: Env): Promise<Respons
     const questionId = uuid();
     await env.DB.prepare(
       `INSERT INTO questions (id, question, question_norm, question_hash, answer, type, options, source, ai_model, has_images, hit_count)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'ai', ?, ?, 1)`
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'ai', ?, ?, 0)
+       ON CONFLICT(question_hash) DO NOTHING`
     ).bind(
       questionId,
       title,

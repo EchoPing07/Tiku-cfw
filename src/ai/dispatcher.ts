@@ -14,16 +14,6 @@ interface DispatchOptions {
   env: Env;
 }
 
-/** 读取设置值 */
-async function getSetting(db: D1Database, key: string, fallback: string): Promise<string> {
-  try {
-    const row = await db.prepare('SELECT value FROM settings WHERE key = ?').bind(key).first<{ value: string }>();
-    return row?.value || fallback;
-  } catch {
-    return fallback;
-  }
-}
-
 /** 按权重分组 */
 function groupByWeight<T extends { weight: number }>(items: T[]): T[][] {
   const groups: Map<number, T[]> = new Map();
@@ -54,12 +44,20 @@ export async function dispatchAI(opts: DispatchOptions): Promise<DispatchResult>
   // 判断渠道类型
   const channelType: ChannelType = images && images.length > 0 ? 'vision' : 'text';
 
-  // 读取设置
-  const timeoutStr = await getSetting(env.DB, 'ai_timeout', '30');
-  const timeout = parseInt(timeoutStr, 10) || 30;
-  const failThresholdStr = await getSetting(env.DB, 'key_fail_threshold', '3');
-  const failThreshold = parseInt(failThresholdStr, 10) || 3;
-  const customPrompt = await getSetting(env.DB, 'system_prompt', '');
+  // 读取设置（一次性查询，减少 D1 往返）
+  let timeout = 30;
+  let failThreshold = 3;
+  let customPrompt = '';
+  try {
+    const settingsRes = await env.DB.prepare(
+      `SELECT key, value FROM settings WHERE key IN ('ai_timeout', 'key_fail_threshold', 'system_prompt')`
+    ).all<{ key: string; value: string }>();
+    for (const r of settingsRes.results || []) {
+      if (r.key === 'ai_timeout') timeout = parseInt(r.value, 10) || timeout;
+      else if (r.key === 'key_fail_threshold') failThreshold = parseInt(r.value, 10) || failThreshold;
+      else if (r.key === 'system_prompt') customPrompt = r.value;
+    }
+  } catch { /* 用默认值 */ }
   const systemPrompt = buildSystemPrompt(customPrompt);
 
   // 构建消息
@@ -91,6 +89,20 @@ export async function dispatchAI(opts: DispatchOptions): Promise<DispatchResult>
   // 按权重分组
   const weightGroups = groupByWeight(channels.results);
 
+  // 一次性查询所有渠道下的启用 key，按 channel_id 分组（避免 N+1 查询）
+  const channelIds = channels.results.map(c => c.id);
+  const keysByChannel = new Map<string, AIChannelKeyRow[]>();
+  if (channelIds.length > 0) {
+    const placeholders = channelIds.map(() => '?').join(',');
+    const allKeys = await env.DB.prepare(
+      `SELECT * FROM ai_channel_keys WHERE channel_id IN (${placeholders}) AND enabled = 1 ORDER BY use_count ASC`
+    ).bind(...channelIds).all<AIChannelKeyRow>();
+    for (const k of allKeys.results || []) {
+      if (!keysByChannel.has(k.channel_id)) keysByChannel.set(k.channel_id, []);
+      keysByChannel.get(k.channel_id)!.push(k);
+    }
+  }
+
   // 追踪第一次和最后一次失败的错误信息，用于最终报错和日志
   // 第一次失败通常是根因（如 401 无效 key），最后一次失败可能是症状（如超时）
   let firstError = '';
@@ -106,13 +118,8 @@ export async function dispatchAI(opts: DispatchOptions): Promise<DispatchResult>
     const shuffledChannels = shuffle(group);
 
     for (const channel of shuffledChannels) {
-      // 查询该渠道下启用的 keys，按 use_count ASC 排序（最少使用优先）
-      const keysResult = await env.DB.prepare(
-        'SELECT * FROM ai_channel_keys WHERE channel_id = ? AND enabled = 1 ORDER BY use_count ASC'
-      ).bind(channel.id).all<AIChannelKeyRow>();
-
-      const keys = keysResult.results;
-      if (!keys || keys.length === 0) continue; // 此渠道无可用 key，跳过
+      const keys = keysByChannel.get(channel.id) || [];
+      if (keys.length === 0) continue; // 此渠道无可用 key，跳过
 
       // 依次尝试每个 key
       for (const key of keys) {
@@ -160,20 +167,13 @@ export async function dispatchAI(opts: DispatchOptions): Promise<DispatchResult>
           lastRawRequest = errReq;
           lastRawResponse = errResp;
 
-          // 失败：fail_count++
-          const newFailCount = ((key.fail_count as number) || 0) + 1;
-
-          if (newFailCount >= failThreshold) {
-            // 达到阈值，禁用此 key
-            await env.DB.prepare(
-              'UPDATE ai_channel_keys SET fail_count = ?, enabled = 0 WHERE id = ?'
-            ).bind(newFailCount, key.id).run();
-          } else {
-            // 未达阈值，仅增加失败计数
-            await env.DB.prepare(
-              'UPDATE ai_channel_keys SET fail_count = ? WHERE id = ?'
-            ).bind(newFailCount, key.id as string).run();
-          }
+          // 失败：原子自增 fail_count，达阈值则禁用（避免并发读改写竞态）
+          await env.DB.prepare(
+            `UPDATE ai_channel_keys
+             SET fail_count = fail_count + 1,
+                 enabled = CASE WHEN fail_count + 1 >= ? THEN 0 ELSE enabled END
+             WHERE id = ?`
+          ).bind(failThreshold, key.id).run();
 
           // 继续尝试下一个 key
           continue;

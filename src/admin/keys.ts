@@ -2,6 +2,7 @@ import type { Env } from '../types/env';
 import { json, error, options } from '../utils/response';
 import { requireAuth } from '../auth/middleware';
 import { uuid, generateApiKey } from '../utils/id';
+import { parseJsonBody } from '../utils/request';
 
 /** API 密钥管理路由 */
 export async function keysHandler(request: Request, env: Env, path: string): Promise<Response> {
@@ -41,10 +42,9 @@ async function listKeys(env: Env): Promise<Response> {
 
 /** 创建密钥 */
 async function createKey(request: Request, env: Env): Promise<Response> {
-  const body = await request.json() as {
-    name?: string;
-    expires_at?: string;
-  };
+  const parsed = await parseJsonBody<{ name?: string; expires_at?: string }>(request);
+  if (!parsed.ok) return parsed.response;
+  const body = parsed.data;
 
   const id = uuid();
   const key = generateApiKey();
@@ -59,18 +59,22 @@ async function createKey(request: Request, env: Env): Promise<Response> {
 
 /** 更新密钥 */
 async function updateKey(request: Request, env: Env, id: string): Promise<Response> {
-  const body = await request.json() as {
-    name?: string;
-    enabled?: number;
-    expires_at?: string;
-  };
+  const parsed = await parseJsonBody<{ name?: string; enabled?: number; expires_at?: string }>(request);
+  if (!parsed.ok) return parsed.response;
+  const body = parsed.data;
 
   const existing = await env.DB.prepare('SELECT id FROM api_keys WHERE id = ?').bind(id).first();
   if (!existing) return error('密钥不存在', 404);
 
-  await env.DB.prepare(
-    `UPDATE api_keys SET name = ?, enabled = ?, expires_at = ? WHERE id = ?`
-  ).bind(body.name || '', body.enabled ?? 1, body.expires_at || null, id).run();
+  // 按字段存在性更新，允许显式置空 expires_at
+  const sets: string[] = [];
+  const params: unknown[] = [];
+  if (body.name !== undefined) { sets.push('name = ?'); params.push(body.name); }
+  if (body.enabled !== undefined) { sets.push('enabled = ?'); params.push(body.enabled); }
+  if (body.expires_at !== undefined) { sets.push('expires_at = ?'); params.push(body.expires_at || null); }
+  if (sets.length === 0) return json({ msg: '无更新' });
+  params.push(id);
+  await env.DB.prepare(`UPDATE api_keys SET ${sets.join(', ')} WHERE id = ?`).bind(...params).run();
 
   return json({ msg: '更新成功' });
 }

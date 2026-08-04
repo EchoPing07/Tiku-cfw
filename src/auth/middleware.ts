@@ -1,13 +1,12 @@
 import type { Env } from '../types/env';
 import { verifyJWT, extractBearer } from './jwt';
 import { unauthorized } from '../utils/response';
-import { corsHeaders } from '../utils/cors';
 
 /** 管理员认证中间件，验证通过返回 null，否则返回 401 响应 */
 export async function requireAuth(request: Request, env: Env): Promise<Response | null> {
-  // OPTIONS 直接放行
+  // OPTIONS 预检交由 index.ts 顶层 applyCors 统一处理
   if (request.method === 'OPTIONS') {
-    return new Response(null, { status: 204, headers: corsHeaders });
+    return new Response(null, { status: 204 });
   }
 
   const token = extractBearer(request);
@@ -25,12 +24,8 @@ export async function requireAuth(request: Request, env: Env): Promise<Response 
 
 /** API Key 鉴权，验证通过返回 { id, key } 对象，否则返回错误响应 */
 export async function requireApiKey(request: Request, env: Env): Promise<{ ok: true; data: { id: string; key: string } } | { ok: false; response: Response }> {
-  // 从 Header 或 Query 参数获取 API Key
-  let apiKey = extractBearer(request);
-  if (!apiKey) {
-    const url = new URL(request.url);
-    apiKey = url.searchParams.get('key');
-  }
+  // 仅接受 Authorization: Bearer <key>，避免 key 泄漏到 URL/访问日志/Referer
+  const apiKey = extractBearer(request);
 
   if (!apiKey) {
     return { ok: false, response: unauthorized('缺少 API Key') };
@@ -50,8 +45,13 @@ export async function requireApiKey(request: Request, env: Env): Promise<{ ok: t
   }
 
   if (row.expires_at) {
-    const expiry = new Date(row.expires_at + 'Z').getTime();
-    if (Date.now() > expiry) {
+    // expires_at 存为 'YYYY-MM-DD'（前端 date input），按当天结束 UTC 解释，
+    // 兼容已带时间后缀的 'YYYY-MM-DDTHH:MM:SS' 格式
+    const normalized = /^\d{4}-\d{2}-\d{2}$/.test(row.expires_at)
+      ? row.expires_at + 'T23:59:59Z'
+      : row.expires_at;
+    const expiry = new Date(normalized).getTime();
+    if (Number.isFinite(expiry) && Date.now() > expiry) {
       return { ok: false, response: unauthorized('API Key 已过期') };
     }
   }

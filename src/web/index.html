@@ -119,7 +119,12 @@ const API = {
     if (token) headers['Authorization'] = 'Bearer ' + token;
     const res = await fetch(path, { ...options, headers });
     if (res.status === 401) { logout(); throw new Error('登录已过期'); }
-    return res.json();
+    const data = await res.json().catch(() => ({}));
+    // 业务失败（code 存在且不为 1）：抛出 msg，避免被调用方当作成功处理
+    if (data && typeof data === 'object' && data.code !== undefined && data.code !== 1) {
+      throw new Error(data.msg || '请求失败');
+    }
+    return data;
   },
   get(path) { return this.request(path); },
   post(path, data) { return this.request(path, { method: 'POST', body: JSON.stringify(data) }); },
@@ -239,7 +244,7 @@ function showEditKeyModal(id){const k=_keysData.find(x=>x.id===id)||{};showModal
 async function updateKey(id){const name=document.getElementById('k-name').value;const enabled=document.getElementById('k-enabled').checked?1:0;try{await API.put('/api/admin/keys/'+id,{name,enabled});toast('已保存','success');closeModal();navigate();}catch(e){toast(e.message,'error');}}
 async function delKey(id){if(!confirm('确认删除？'))return;try{await API.del('/api/admin/keys/'+id);toast('已删除','info');navigate();}catch(e){toast(e.message,'error');}}
 async function copyOCSConfig(id){try{const r=await API.get('/api/admin/keys/'+id+'/ocs-config');copyText(r.config);toast('OCS 配置已复制','success');}catch(e){toast(e.message,'error');}}
-async function toggleKeyShare(id,on){const v=on?1:0;try{await API.put('/api/admin/keys/'+id,{share_enabled:v});toast(v?'已开启分享，链接已生成':'已关闭分享，链接已失效',v?'success':'info');navigate();}catch(e){toast(e.message,'error');}}
+async function toggleKeyShare(id,on){const v=on?1:0;try{const r=await API.put('/api/admin/keys/'+id,{share_enabled:v});if(r.share_enabled!==undefined){const k=_keysData.find(x=>x.id===id);if(k){k.share_enabled=r.share_enabled;k.share_token=r.share_token||null;}}toast(v?'已开启分享，链接已生成':'已关闭分享，链接已失效',v?'success':'info');}catch(e){toast(e.message||'操作失败','error');}navigate();}
 
 // ============================================================
 // AI 渠道

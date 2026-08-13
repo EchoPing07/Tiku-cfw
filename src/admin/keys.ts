@@ -88,15 +88,18 @@ async function updateKey(request: Request, env: Env, id: string): Promise<Respon
   // 按字段存在性更新，允许显式置空 expires_at
   const sets: string[] = [];
   const params: unknown[] = [];
+  let shareEnabled: number | undefined;
+  let shareToken: string | null | undefined;
   if (body.name !== undefined) { sets.push('name = ?'); params.push(body.name); }
   if (body.enabled !== undefined) { sets.push('enabled = ?'); params.push(body.enabled); }
   if (body.expires_at !== undefined) { sets.push('expires_at = ?'); params.push(body.expires_at || null); }
   // 分享开关：开启时生成全新令牌，关闭时清空令牌使链接立即失效
   // 严格判定：仅数值 1 视为开启，避免 "0"/"false"/true 等宽松真值误开启
   if (body.share_enabled !== undefined) {
-    const on = Number(body.share_enabled) === 1 ? 1 : 0;
+    shareEnabled = Number(body.share_enabled) === 1 ? 1 : 0;
+    shareToken = shareEnabled ? 'sh_' + randomHex(16) : null;
     sets.push('share_enabled = ?', 'share_token = ?');
-    params.push(on, on ? 'sh_' + randomHex(16) : null);
+    params.push(shareEnabled, shareToken);
   }
   if (sets.length === 0) return json({ msg: '无更新' });
   params.push(id);
@@ -110,7 +113,13 @@ async function updateKey(request: Request, env: Env, id: string): Promise<Respon
     throw err;
   }
 
-  return json({ msg: '更新成功' });
+  // 返回新生成的分享状态/令牌，前端可即时更新 UI
+  const share: Record<string, unknown> = {};
+  if (body.share_enabled !== undefined) {
+    share.share_enabled = shareEnabled;
+    share.share_token = shareToken;
+  }
+  return json({ msg: '更新成功', ...share });
 }
 
 /** 获取某密钥的 OCS 配置（管理面板复制用，与分享页输出一致） */

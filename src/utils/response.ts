@@ -1,8 +1,8 @@
-/** JSON 响应（CORS 由 index.ts 顶层 applyCors 统一注入） */
+/** JSON 响应（CORS 由 index.ts 顶层 applyCors 统一注入；禁止缓存避免浏览器缓存陈旧数据） */
 export function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
   });
 }
 

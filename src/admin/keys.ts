@@ -47,8 +47,10 @@ async function listKeys(env: Env): Promise<Response> {
        FROM api_keys ORDER BY created_at DESC`
     ).all();
     rows = result.results || [];
-  } catch {
-    // 迁移 0004 未执行时（无分享列）降级为旧查询，分享字段按关闭处理
+  } catch (err) {
+    // 仅当 0004 迁移未执行（share_enabled 列缺失）时降级为旧查询；
+    // 其他错误如实抛出，避免"保存成功但列表误显示关闭"
+    if (!(err instanceof Error && /no such column/i.test(err.message))) throw err;
     const result = await env.DB.prepare(
       `SELECT id, key, name, enabled, expires_at, use_count, last_used, created_at
        FROM api_keys ORDER BY created_at DESC`
@@ -106,8 +108,8 @@ async function updateKey(request: Request, env: Env, id: string): Promise<Respon
   try {
     await env.DB.prepare(`UPDATE api_keys SET ${sets.join(', ')} WHERE id = ?`).bind(...params).run();
   } catch (err) {
-    // 分享字段依赖迁移 0004，未执行时给出明确提示
-    if (body.share_enabled !== undefined) {
+    // 分享字段依赖迁移 0004：仅当 share_enabled 列缺失时提示迁移，其他错误如实抛出
+    if (body.share_enabled !== undefined && err instanceof Error && /no such column/i.test(err.message)) {
       return error('分享功能需要先执行迁移：npm run db:migrate:share');
     }
     throw err;

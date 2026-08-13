@@ -3,6 +3,7 @@ import { refreshCorsConfig, applyCors } from './utils/cors';
 import { json } from './utils/response';
 import { healthHandler } from './api/health';
 import { searchHandler } from './api/search';
+import { shareOcsHandler } from './api/share';
 import { adminLoginHandler, adminVerifyHandler } from './admin/auth';
 import { dashboardHandler } from './admin/dashboard';
 import { questionsHandler } from './admin/questions';
@@ -26,6 +27,11 @@ async function route(request: Request, env: Env): Promise<Response> {
     // ===== 公开 API =====
     if (path === '/api/health') {
       return await healthHandler(request, env);
+    }
+
+    // 免登录 OCS 配置分享（令牌鉴权，无需登录）
+    if (path.startsWith('/api/share/')) {
+      return await shareOcsHandler(request, env, path);
     }
 
     if (path === '/api/search') {

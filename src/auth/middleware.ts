@@ -1,6 +1,7 @@
 import type { Env } from '../types/env';
 import { verifyJWT, extractBearer } from './jwt';
 import { unauthorized } from '../utils/response';
+import { isExpired } from '../utils/expiry';
 
 /** 管理员认证中间件，验证通过返回 null，否则返回 401 响应 */
 export async function requireAuth(request: Request, env: Env): Promise<Response | null> {
@@ -44,16 +45,8 @@ export async function requireApiKey(request: Request, env: Env): Promise<{ ok: t
     return { ok: false, response: unauthorized('API Key 已禁用') };
   }
 
-  if (row.expires_at) {
-    // expires_at 存为 'YYYY-MM-DD'（前端 date input），按当天结束 UTC 解释，
-    // 兼容已带时间后缀的 'YYYY-MM-DDTHH:MM:SS' 格式
-    const normalized = /^\d{4}-\d{2}-\d{2}$/.test(row.expires_at)
-      ? row.expires_at + 'T23:59:59Z'
-      : row.expires_at;
-    const expiry = new Date(normalized).getTime();
-    if (Number.isFinite(expiry) && Date.now() > expiry) {
-      return { ok: false, response: unauthorized('API Key 已过期') };
-    }
+  if (isExpired(row.expires_at)) {
+    return { ok: false, response: unauthorized('API Key 已过期') };
   }
 
   return { ok: true, data: { id: row.id, key: row.key } };

@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex, nofollow">
+  <title>OCS 题库配置</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    // 跟随系统主题，防止闪烁
+    if (window.matchMedia('(prefers-color-scheme: dark)').matches) document.documentElement.classList.add('dark');
+  </script>
+</head>
+<body class="bg-white dark:bg-neutral-950 text-gray-900 dark:text-gray-100 min-h-screen">
+  <div class="max-w-2xl mx-auto px-4 py-10">
+    <h1 id="page-title" class="text-lg font-semibold tracking-tight">OCS 题库配置</h1>
+    <p class="text-xs text-gray-400 mt-1 mb-6">此页面由管理员通过分享开关生成，仅供配置 OCS 网课助手使用</p>
+
+    <div id="loading" class="text-sm text-gray-400">加载中...</div>
+
+    <div id="error" class="hidden border border-red-400 dark:border-red-600 rounded-lg p-4 text-sm text-red-500">链接无效或已关闭，请联系管理员重新生成。</div>
+
+    <div id="content" class="hidden">
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-xs text-gray-400">将以下内容完整复制到 OCS 题库配置</span>
+        <button id="copy-btn" onclick="copyConfig()" class="px-3 py-1.5 bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 rounded-lg text-xs font-medium hover:bg-gray-700 dark:hover:bg-gray-300 transition-colors">复制配置</button>
+      </div>
+      <pre id="config" class="text-xs font-mono text-gray-600 dark:text-gray-400 bg-gray-50 dark:bg-neutral-900 border border-gray-200 dark:border-gray-800 rounded-lg p-4 overflow-x-auto whitespace-pre-wrap break-all"></pre>
+      <p class="text-xs text-amber-600 dark:text-amber-400 mt-4">⚠️ 该配置包含 API 密钥，任何拿到此链接的人都可以使用你的搜题接口，请勿转发给他人；关闭分享开关后本链接立即失效。</p>
+    </div>
+  </div>
+
+  <script>
+    const $=id=>document.getElementById(id);
+    function showError(){$('loading').classList.add('hidden');$('error').classList.remove('hidden');}
+    function showContent(){$('loading').classList.add('hidden');$('content').classList.remove('hidden');}
+    function copyConfig(){
+      const text=$('config').textContent;
+      const done=()=>{const b=$('copy-btn');const old=b.textContent;b.textContent='已复制';setTimeout(()=>b.textContent=old,2000);};
+      if(navigator.clipboard&&navigator.clipboard.writeText){
+        navigator.clipboard.writeText(text).then(done).catch(()=>{});
+      }else{
+        // 非安全上下文降级方案
+        const ta=document.createElement('textarea');ta.value=text;document.body.appendChild(ta);ta.select();document.execCommand('copy');ta.remove();done();
+      }
+    }
+    (async function(){
+      const token=new URLSearchParams(location.search).get('token');
+      if(!token)return showError();
+      try{
+        const res=await fetch(location.origin+'/api/share/ocs/'+encodeURIComponent(token));
+        if(!res.ok)return showError();
+        const text=await res.text();
+        // 解析出站点名用于标题展示（失败则保持默认标题）
+        try{const arr=JSON.parse(text);if(Array.isArray(arr)&&arr[0]&&arr[0].name){$('page-title').textContent=arr[0].name+' · OCS 题库配置';}}catch{}
+        $('config').textContent=text;
+        showContent();
+      }catch{showError();}
+    })();
+  </script>
+</body>
+</html>

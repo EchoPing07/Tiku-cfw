@@ -118,10 +118,15 @@ npx wrangler secret put JWT_SECRET
 npm install
 npm run db:migrate:local   # 本地建表
 npm run db:seed:local      # 写入初始数据
+npm run db:migrate:share:local  # 密钥分享功能（0004，可选）
 npm run dev                 # 启动开发服务器 → http://localhost:8787
 ```
 
 默认密码 `password`。
+
+### 密钥分享链接
+
+管理面板「API 密钥」页面可为每个密钥单独开启「分享 OCS 配置」开关，开启后生成免登录链接（`/share.html?token=...`），打开即可查看并复制完整的 OCS 配置。关闭开关或密钥被禁用/过期后链接立即失效。注意：配置中包含 API 密钥，请勿将链接转发给他人。
 
 ---
 
@@ -173,6 +178,8 @@ Content-Type: application/json
 | GET | `/api/admin/questions/export` | 导出 |
 | GET/POST | `/api/admin/keys` | API 密钥管理 |
 | PUT/DELETE | `/api/admin/keys/:id` | 编辑/删除 |
+| GET | `/api/admin/keys/:id/ocs-config` | 获取 OCS 配置（管理面板复制用） |
+| GET | `/api/share/ocs/:token` | 免登录查看 OCS 配置（分享开关开启后有效） |
 | GET/POST | `/api/admin/channels` | AI 渠道管理 |
 | PUT/DELETE | `/api/admin/channels/:id` | 编辑/删除渠道 |
 | GET/POST | `/api/admin/channels/:id/keys` | 渠道密钥管理 |

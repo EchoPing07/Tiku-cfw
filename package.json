@@ -12,6 +12,8 @@
     "db:migrate:debug:local": "wrangler d1 execute tiku-cfw-db --local --file=migrations/0003_add_log_debug.sql",
     "db:migrate:share": "wrangler d1 execute tiku-cfw-db --file=migrations/0004_add_key_share.sql",
     "db:migrate:share:local": "wrangler d1 execute tiku-cfw-db --local --file=migrations/0004_add_key_share.sql",
+    "db:migrate:token": "wrangler d1 execute tiku-cfw-db --file=migrations/0005_add_token_usage.sql",
+    "db:migrate:token:local": "wrangler d1 execute tiku-cfw-db --local --file=migrations/0005_add_token_usage.sql",
     "db:seed": "wrangler d1 execute tiku-cfw-db --file=migrations/0002_seed.sql",
     "db:seed:local": "wrangler d1 execute tiku-cfw-db --local --file=migrations/0002_seed.sql",
     "typecheck": "tsc --noEmit",

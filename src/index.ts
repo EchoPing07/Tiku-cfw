@@ -6,6 +6,7 @@ import { searchHandler } from './api/search';
 import { shareOcsHandler } from './api/share';
 import { adminLoginHandler, adminVerifyHandler } from './admin/auth';
 import { dashboardHandler } from './admin/dashboard';
+import { debugSearchHandler } from './admin/debug';
 import { questionsHandler } from './admin/questions';
 import { keysHandler } from './admin/keys';
 import { channelsHandler } from './admin/channels';
@@ -64,7 +65,12 @@ async function route(request: Request, env: Env): Promise<Response> {
     }
 
     if (path.startsWith('/api/admin/settings')) {
-      return await settingsHandler(request, env, path);
+      return settingsHandler(request, env, path);
+    }
+
+    // 调试搜题（管理面板搜题测试页）
+    if (path === '/api/admin/debug/search') {
+      return debugSearchHandler(request, env);
     }
 
     if (path.startsWith('/api/admin/logs')) {

@@ -33,6 +33,19 @@ export async function questionsHandler(request: Request, env: Env, path: string)
     return error('不支持的方法', 405);
   }
 
+  // /api/admin/questions/by-hash/:hash - 按归一化哈希查题目（日志纠错用）
+  const byHashMatch = path.match(/^\/api\/admin\/questions\/by-hash\/(.+)$/);
+  if (byHashMatch) {
+    let hash: string;
+    try {
+      hash = decodeURIComponent(byHashMatch[1]);
+    } catch {
+      return error('哈希编码无效');
+    }
+    if (request.method === 'GET') return getQuestionByHash(env, hash);
+    return error('不支持的方法', 405);
+  }
+
   // /api/admin/questions/:id
   const idMatch = path.match(/^\/api\/admin\/questions\/(.+)$/);
   if (idMatch) {
@@ -93,6 +106,14 @@ async function getQuestion(env: Env, id: string): Promise<Response> {
   const row = await env.DB.prepare('SELECT * FROM questions WHERE id = ?').bind(id).first();
   if (!row) return error('题目不存在', 404);
   return json(row);
+}
+
+/** 按归一化哈希查询（日志详情关联缓存题目），未缓存返回 question: null */
+async function getQuestionByHash(env: Env, hash: string): Promise<Response> {
+  const row = await env.DB.prepare(
+    'SELECT id, question, answer, type, options, source, hit_count, created_at, updated_at FROM questions WHERE question_hash = ?'
+  ).bind(hash).first();
+  return json({ code: 1, question: row || null });
 }
 
 /** 创建题目 */

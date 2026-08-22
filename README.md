@@ -12,10 +12,10 @@ Tiku-cfw 是一个部署在 Cloudflare Workers 上的 AI 题库服务。它接�
 ### 核心特性
 
 - 🔍 **OCS 兼容** — 搜题接口完全兼容 OCS `AnswererWrapper` 规范，配置即用
-- 🤖 **AI 多渠道** — 支持文本/视觉两类模型，多渠道权重调度，最少使用优先轮询，失败自动禁用降级
+- 🤖 **AI 多渠道** — 支持文本/视觉两类模型，多渠道权重调度，最少使用优先轮询，失败自动禁用降级，渠道支持一键测试连通（成功自动恢复密钥）
 - 💾 **智能缓存** — 题目归一化后精确匹配，命中缓存秒回，永不过期
 - 🖼️ **图片支持** — 带图题目自动路由到视觉模型渠道
-- 📊 **Web 管理面板** — 仪表盘统计、题库管理、密钥管理、AI 渠道配置、搜索日志
+- 📊 **Web 管理面板** — 仪表盘（题库查询 + AI Token 消耗双分区、14 天趋势图）、题库管理、搜题测试调试台、密钥管理、AI 渠道配置、搜索日志（含 Token 用量与答案纠错）
 - 🌓 **明暗主题** — 跟随系统或手动切换
 - 🚀 **零成本部署** — Cloudflare Workers 免费额度 + D1 免费额度 + GitHub Actions 自动部署
 
@@ -119,6 +119,7 @@ npm install
 npm run db:migrate:local   # 本地建表
 npm run db:seed:local      # 写入初始数据
 npm run db:migrate:share:local  # 密钥分享功能（0004，可选）
+npm run db:migrate:token:local  # Token 用量统计（0005，可选，不执行则仪表盘 Token 显示为 0）
 npm run dev                 # 启动开发服务器 → http://localhost:8787
 ```
 
@@ -174,6 +175,7 @@ Content-Type: application/json
 | GET | `/api/admin/dashboard` | 仪表盘 |
 | GET/POST | `/api/admin/questions` | 题目列表/创建 |
 | PUT/DELETE | `/api/admin/questions/:id` | 编辑/删除 |
+| GET | `/api/admin/questions/by-hash/:hash` | 按归一化哈希查题目（日志纠错用） |
 | POST | `/api/admin/questions/import` | 批量导入 |
 | GET | `/api/admin/questions/export` | 导出 |
 | GET/POST | `/api/admin/keys` | API 密钥管理 |
@@ -182,9 +184,11 @@ Content-Type: application/json
 | GET | `/api/share/ocs/:token` | 免登录查看 OCS 配置（分享开关开启后有效） |
 | GET/POST | `/api/admin/channels` | AI 渠道管理 |
 | PUT/DELETE | `/api/admin/channels/:id` | 编辑/删除渠道 |
+| POST | `/api/admin/channels/:id/test` | 测试渠道连通性（逐密钥，成功自动恢复） |
 | GET/POST | `/api/admin/channels/:id/keys` | 渠道密钥管理 |
 | PUT/DELETE | `/api/admin/channel-keys/:id` | 编辑/删除密钥 |
 | POST | `/api/admin/channel-keys/:id/reset` | 重置失败计数 |
+| POST | `/api/admin/debug/search` | 调试搜题（管理面板搜题测试页，走完整链路） |
 | GET/PUT | `/api/admin/settings` | 系统设置 |
 | GET/DELETE | `/api/admin/logs` | 搜索日志 |
 | GET | `/api/health` | 健康检查 |
@@ -202,9 +206,9 @@ Tiku-cfw/
 │   └── migrate.yml             # 手动触发数据库迁移
 ├── src/
 │   ├── index.ts                # Worker 入口，路由分发
-│   ├── api/                    # 搜题接口 + 健康检查
-│   ├── admin/                  # 管理后台 API（7 个模块）
-│   ├── ai/                     # AI 多渠道调度器
+│   ├── api/                    # 搜题接口（OCS + 调试共用核心）+ 健康检查
+│   ├── admin/                  # 管理后台 API（8 个模块，含调试搜题）
+│   ├── ai/                     # AI 多渠道调度器（含 Token 用量采集）
 │   ├── cache/                  # 题目归一化 + 哈希
 │   ├── auth/                   # JWT + API Key 认证
 │   ├── types/                  # 类型定义

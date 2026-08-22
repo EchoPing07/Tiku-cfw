@@ -108,6 +108,7 @@ export async function dispatchAI(opts: DispatchOptions): Promise<DispatchResult>
   let firstError = '';
   let firstRawRequest = '';
   let firstRawResponse = '';
+  let firstChannel = '';
   let lastError = '';
   let lastRawRequest = '';
   let lastRawResponse = '';
@@ -148,6 +149,7 @@ export async function dispatchAI(opts: DispatchOptions): Promise<DispatchResult>
             content: parsedAnswer,
             channelName: channel.name as string,
             model: result.model,
+            usage: result.usage,
             rawRequest: result.rawRequest,
             rawResponse: result.rawResponse,
           };
@@ -161,6 +163,7 @@ export async function dispatchAI(opts: DispatchOptions): Promise<DispatchResult>
             firstError = errMsg;
             firstRawRequest = errReq;
             firstRawResponse = errResp;
+            firstChannel = channel.name as string;
           }
           // 最后一次失败也保留（可能展示不同的失败模式）
           lastError = errMsg;
@@ -194,6 +197,7 @@ export async function dispatchAI(opts: DispatchOptions): Promise<DispatchResult>
   throw new AIError(
     errorMsg,
     firstRawRequest || lastRawRequest || undefined,
-    firstRawResponse || lastRawResponse || undefined
+    firstRawResponse || lastRawResponse || undefined,
+    firstChannel || undefined
   );
 }

@@ -1,4 +1,4 @@
-import type { AIRequest, AIResult } from './types';
+import type { AIRequest, AIResult, TokenUsage } from './types';
 import { AIError } from './types';
 
 /** 调用 OpenAI 兼容接口（/chat/completions） */
@@ -61,7 +61,11 @@ export async function callOpenAI(req: AIRequest): Promise<AIResult> {
     );
   }
 
-  let data: { choices?: Array<{ message?: { content?: string } }>; model?: string };
+  let data: {
+    choices?: Array<{ message?: { content?: string } }>;
+    model?: string;
+    usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+  };
   try {
     data = JSON.parse(responseText);
   } catch {
@@ -73,9 +77,22 @@ export async function callOpenAI(req: AIRequest): Promise<AIResult> {
     throw new AIError('AI 返回内容为空', rawRequest, responseText);
   }
 
+  // 提取 usage（部分接口可能不返回，此时为 null）
+  let usage: TokenUsage | null = null;
+  const u = data.usage;
+  if (u && typeof u.prompt_tokens === 'number') {
+    const completion = u.completion_tokens ?? 0;
+    usage = {
+      promptTokens: u.prompt_tokens,
+      completionTokens: completion,
+      totalTokens: u.total_tokens ?? (u.prompt_tokens + completion),
+    };
+  }
+
   return {
     content: content.trim(),
     model: data.model || req.model,
+    usage,
     rawRequest,
     rawResponse: responseText,
   };

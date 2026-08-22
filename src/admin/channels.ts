@@ -1,8 +1,10 @@
 import type { Env } from '../types/env';
+import type { AIChannelRow, AIChannelKeyRow } from '../ai/types';
 import { json, error, options } from '../utils/response';
 import { requireAuth } from '../auth/middleware';
 import { uuid } from '../utils/id';
 import { parseJsonBody } from '../utils/request';
+import { callOpenAI } from '../ai/openai-client';
 
 /** AI 渠道管理路由 */
 export async function channelsHandler(request: Request, env: Env, path: string): Promise<Response> {
@@ -34,6 +36,13 @@ export async function channelsHandler(request: Request, env: Env, path: string):
     const channelId = channelKeysMatch[1];
     if (request.method === 'GET') return listChannelKeys(env, channelId);
     if (request.method === 'POST') return createChannelKey(request, env, channelId);
+    return error('不支持的方法', 405);
+  }
+
+  // /api/admin/channels/:id/test - 测试渠道连通性
+  const testMatch = path.match(/^\/api\/admin\/channels\/([^/]+)\/test$/);
+  if (testMatch) {
+    if (request.method === 'POST') return testChannelConnection(env, testMatch[1]);
     return error('不支持的方法', 405);
   }
 
@@ -219,4 +228,82 @@ async function resetChannelKey(env: Env, id: string): Promise<Response> {
   ).bind(id).run();
 
   return json({ msg: '已重置' });
+}
+
+// ============ 渠道连通性测试 ============
+
+/** 掩码密钥：保留前 6 位与后 4 位 */
+function maskKey(key: string): string {
+  if (key.length <= 12) return key.slice(0, 4) + '****';
+  return key.slice(0, 6) + '...' + key.slice(-4);
+}
+
+interface KeyTestResult {
+  key_id: string;
+  name: string;
+  masked: string;
+  ok: boolean;
+  latency_ms: number;
+  model: string | null;
+  error: string | null;
+}
+
+/**
+ * 测试渠道连通性：对渠道下每个密钥发一次极小的真实补全请求。
+ * 测试通过的密钥自动清除失败计数并重新启用（带验证的自愈）；
+ * 测试失败不累加 fail_count（人工测试不应触发自动禁用）。
+ */
+async function testChannelConnection(env: Env, id: string): Promise<Response> {
+  const channel = await env.DB.prepare('SELECT * FROM ai_channels WHERE id = ?').bind(id).first<AIChannelRow>();
+  if (!channel) return error('渠道不存在', 404);
+
+  const keys = await env.DB.prepare(
+    'SELECT * FROM ai_channel_keys WHERE channel_id = ? ORDER BY enabled DESC, use_count ASC'
+  ).bind(id).all<AIChannelKeyRow>();
+
+  const keyRows = keys.results || [];
+  if (keyRows.length === 0) {
+    return json({ code: 1, ok: false, msg: '渠道下没有密钥，请先添加', keys: [] });
+  }
+
+  // 并行测试所有密钥，避免串行时多个超时密钥把总耗时拉到 N×15s
+  const results = await Promise.all(keyRows.map(async (k): Promise<KeyTestResult> => {
+    const start = Date.now();
+    try {
+      const r = await callOpenAI({
+        messages: [{ role: 'user', content: 'ping' }],
+        baseUrl: channel.base_url as string,
+        apiKey: k.api_key as string,
+        model: channel.model as string,
+        temperature: 0,
+        maxTokens: 16,
+        timeout: 15,
+      });
+      return {
+        key_id: k.id, name: k.name || '', masked: maskKey(k.api_key as string),
+        ok: true, latency_ms: Date.now() - start, model: r.model, error: null,
+      };
+    } catch (err) {
+      return {
+        key_id: k.id, name: k.name || '', masked: maskKey(k.api_key as string),
+        ok: false, latency_ms: Date.now() - start, model: null,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }));
+
+  // 测试通过的密钥自愈：清除失败计数并重新启用（带验证的重置）
+  await Promise.all(
+    results.filter(r => r.ok).map(r =>
+      env.DB.prepare('UPDATE ai_channel_keys SET fail_count = 0, enabled = 1 WHERE id = ?').bind(r.key_id).run()
+    )
+  );
+
+  const ok = results.some(r => r.ok);
+  return json({
+    code: 1,
+    ok,
+    msg: ok ? '连接正常' : '全部密钥不可用',
+    keys: results,
+  });
 }

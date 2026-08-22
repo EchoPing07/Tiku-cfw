@@ -20,12 +20,13 @@ jobs:
         run: sed -i "s/YOUR_D1_DATABASE_ID/${{ secrets.D1_DATABASE_ID }}/g" wrangler.toml
 
       - name: Run Migrations
-        # 0001/0002 幂等；0003/0004 为 ALTER 加列，重复执行报 duplicate column 属正常，用 || 容错
+        # 0001/0002 幂等；0003/0004/0005 为 ALTER 加列，重复执行报 duplicate column 属正常，用 || 容错
         run: |
           npx wrangler d1 execute tiku-cfw-db --remote --file=migrations/0001_init.sql
           npx wrangler d1 execute tiku-cfw-db --remote --file=migrations/0002_seed.sql
           npx wrangler d1 execute tiku-cfw-db --remote --file=migrations/0003_add_log_debug.sql || echo "0003 已执行过（duplicate column 属正常）"
           npx wrangler d1 execute tiku-cfw-db --remote --file=migrations/0004_add_key_share.sql || echo "0004 已执行过（duplicate column 属正常）"
+          npx wrangler d1 execute tiku-cfw-db --remote --file=migrations/0005_add_token_usage.sql || echo "0005 已执行过（duplicate column 属正常）"
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

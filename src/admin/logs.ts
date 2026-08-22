@@ -18,6 +18,44 @@ export async function logsHandler(request: Request, env: Env, path: string): Pro
   return error('接口不存在', 404);
 }
 
+/** search_logs 列级别（对应迁移进度），按 isolate 探测一次并缓存，避免每次查询先经历失败 */
+type LogsSchema = 'full' | 'debug' | 'base';
+let logsSchema: LogsSchema | null = null;
+
+const isNoSuchColumn = (err: unknown): boolean => err instanceof Error && /no such column/i.test(err.message);
+
+const LOG_COLUMNS: Record<LogsSchema, string> = {
+  full: 'id, question, question_hash, found, from_cache, answer, ai_channel, ai_model, duration_ms, error, created_at, ai_request, ai_response, prompt_tokens, completion_tokens, total_tokens',
+  debug: 'id, question, question_hash, found, from_cache, answer, ai_channel, ai_model, duration_ms, error, created_at, ai_request, ai_response',
+  base: 'id, question, question_hash, found, from_cache, answer, ai_channel, ai_model, duration_ms, error, created_at',
+};
+
+async function selectLogsPage(
+  env: Env,
+  where: string,
+  params: unknown[],
+  size: number,
+  offset: number
+): Promise<D1Result<Record<string, unknown>>> {
+  const order: LogsSchema[] = logsSchema ? [logsSchema] : ['full', 'debug', 'base'];
+  let lastErr: unknown;
+  for (const s of order) {
+    try {
+      const r = await env.DB.prepare(
+        `SELECT ${LOG_COLUMNS[s]} FROM search_logs ${where}
+         ORDER BY created_at DESC LIMIT ? OFFSET ?`
+      ).bind(...params, size, offset).all<Record<string, unknown>>();
+      logsSchema = s;
+      return r;
+    } catch (err) {
+      if (!isNoSuchColumn(err)) throw err;
+      lastErr = err;
+      logsSchema = null; // 缓存失效（如表结构变化），退回逐级探测
+    }
+  }
+  throw lastErr;
+}
+
 /** 日志列表 */
 async function listLogs(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
@@ -46,30 +84,8 @@ async function listLogs(request: Request, env: Env): Promise<Response> {
     `SELECT COUNT(*) as count FROM search_logs ${where}`
   ).bind(...params).first<{ count: number }>();
 
-  // 列表（含 AI 请求/响应原始内容与 Token 用量，方便排查）
-  // 按迁移状态降级：全字段（0003+0005）→ 无 token 列（0003）→ 基础列（0001）
-  let listResult;
-  try {
-    listResult = await env.DB.prepare(
-      `SELECT id, question, question_hash, found, from_cache, answer, ai_channel, ai_model, duration_ms, error, created_at, ai_request, ai_response, prompt_tokens, completion_tokens, total_tokens
-       FROM search_logs ${where}
-       ORDER BY created_at DESC LIMIT ? OFFSET ?`
-    ).bind(...params, size, offset).all();
-  } catch {
-    try {
-      listResult = await env.DB.prepare(
-        `SELECT id, question, question_hash, found, from_cache, answer, ai_channel, ai_model, duration_ms, error, created_at, ai_request, ai_response
-         FROM search_logs ${where}
-         ORDER BY created_at DESC LIMIT ? OFFSET ?`
-      ).bind(...params, size, offset).all();
-    } catch {
-      listResult = await env.DB.prepare(
-        `SELECT id, question, question_hash, found, from_cache, answer, ai_channel, ai_model, duration_ms, error, created_at
-         FROM search_logs ${where}
-         ORDER BY created_at DESC LIMIT ? OFFSET ?`
-      ).bind(...params, size, offset).all();
-    }
-  }
+  // 列表（含 AI 请求/响应原始内容与 Token 用量，方便排查；列级别按迁移状态自动降级）
+  const listResult = await selectLogsPage(env, where, params, size, offset);
 
   return json({
     total: countRow?.count || 0,

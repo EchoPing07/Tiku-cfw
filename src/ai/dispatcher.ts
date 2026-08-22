@@ -37,9 +37,13 @@ function shuffle<T>(arr: T[]): T[] {
   return result;
 }
 
+/** 调度总预算：多 Key 多模型全挂时避免 N×超时 的串行等待拖垮请求 */
+const MAX_DISPATCH_MS = 60_000;
+
 /** 多模型 AI 调度器 */
 export async function dispatchAI(opts: DispatchOptions): Promise<DispatchResult> {
   const { title, type, options, images, env } = opts;
+  const deadline = Date.now() + MAX_DISPATCH_MS;
 
   // 判断模型类型（文本/视觉）
   const channelType: ChannelType = images && images.length > 0 ? 'vision' : 'text';
@@ -124,6 +128,16 @@ export async function dispatchAI(opts: DispatchOptions): Promise<DispatchResult>
 
       // 依次尝试每个 key
       for (const key of keys) {
+        // 超出总预算：中止剩余尝试（未尝试的 key 不计入失败），携带已有错误直接抛出
+        if (Date.now() >= deadline) {
+          throw new AIError(
+            `AI 调度总耗时超过 ${Math.round(MAX_DISPATCH_MS / 1000)}s，已中止剩余尝试` +
+              (firstError ? `（首次错误：${firstError}）` : ''),
+            firstRawRequest || lastRawRequest || undefined,
+            firstRawResponse || lastRawResponse || undefined,
+            firstChannel || undefined
+          );
+        }
         try {
           const result = await callOpenAI({
             messages,

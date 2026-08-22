@@ -14,9 +14,13 @@
     "db:migrate:share:local": "wrangler d1 execute tiku-cfw-db --local --file=migrations/0004_add_key_share.sql",
     "db:migrate:token": "wrangler d1 execute tiku-cfw-db --file=migrations/0005_add_token_usage.sql",
     "db:migrate:token:local": "wrangler d1 execute tiku-cfw-db --local --file=migrations/0005_add_token_usage.sql",
+    "db:migrate:rate": "wrangler d1 execute tiku-cfw-db --file=migrations/0006_add_rate_limits.sql",
+    "db:migrate:rate:local": "wrangler d1 execute tiku-cfw-db --local --file=migrations/0006_add_rate_limits.sql",
     "db:seed": "wrangler d1 execute tiku-cfw-db --file=migrations/0002_seed.sql",
     "db:seed:local": "wrangler d1 execute tiku-cfw-db --local --file=migrations/0002_seed.sql",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "tail": "wrangler tail"
   },
   "keywords": [
@@ -39,6 +43,7 @@
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250101.0",
     "typescript": "^5.7.0",
+    "vitest": "^4.1.11",
     "wrangler": "^3.99.0"
   }
 }

@@ -17,7 +17,8 @@ export async function callOpenAI(req: AIRequest): Promise<AIResult> {
 
   const rawRequest = JSON.stringify(body, null, 2);
 
-  let response: Response;
+  let response: Response | undefined;
+  let responseText: string;
   try {
     response = await fetch(url, {
       method: 'POST',
@@ -28,30 +29,30 @@ export async function callOpenAI(req: AIRequest): Promise<AIResult> {
       body: JSON.stringify(body),
       signal: controller.signal,
     });
+    // 读取原始响应文本（无论成功还是失败都可用于调试）。
+    // 与 fetch 放在同一 try 内：超时中止对响应体读取同样生效，避免慢速滴流响应无限挂起
+    responseText = await response.text();
   } catch (err) {
-    // fetch 本身抛异常（DNS 失败、连接拒绝、超时 abort 等）
     if (err instanceof DOMException && err.name === 'AbortError') {
       throw new AIError('AI 请求超时', rawRequest);
     }
+    if (response === undefined) {
+      // fetch 本身抛异常（DNS 失败、连接拒绝等）
+      throw new AIError(
+        `AI 网络请求失败: ${err instanceof Error ? err.message : String(err)}`,
+        rawRequest
+      );
+    }
+    // response.text() 抛异常（连接中断、响应体读取失败等）
     throw new AIError(
-      `AI 网络请求失败: ${err instanceof Error ? err.message : String(err)}`,
+      `AI 响应读取失败: ${err instanceof Error ? err.message : String(err)}`,
       rawRequest
     );
   } finally {
     clearTimeout(timeoutId);
   }
 
-  // 读取原始响应文本（无论成功还是失败都可用于调试）
-  let responseText: string;
-  try {
-    responseText = await response.text();
-  } catch (err) {
-    // response.text() 抛异常（连接中断、响应体读取失败等）
-    throw new AIError(
-      `AI 响应读取失败: ${err instanceof Error ? err.message : String(err)}`,
-      rawRequest
-    );
-  }
+  if (!response) throw new AIError('AI 响应丢失', rawRequest); // 理论不可达，收窄类型
 
   if (!response.ok) {
     throw new AIError(

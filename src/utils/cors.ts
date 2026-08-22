@@ -3,8 +3,9 @@ let cachedOrigins = '*';
 let cachedAt = 0;
 const CACHE_TTL = 60_000;
 
-export async function refreshCorsConfig(db: D1Database): Promise<void> {
-  if (Date.now() - cachedAt < CACHE_TTL) return;
+/** force=true 跳过 TTL 缓存立即重读（保存设置后调用，使新配置即时生效于当前 isolate） */
+export async function refreshCorsConfig(db: D1Database, force = false): Promise<void> {
+  if (!force && Date.now() - cachedAt < CACHE_TTL) return;
   try {
     const row = await db.prepare('SELECT value FROM settings WHERE key = ?').bind('cors_origins').first<{ value: string }>();
     if (row?.value) cachedOrigins = row.value;

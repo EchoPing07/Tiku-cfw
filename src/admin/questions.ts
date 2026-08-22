@@ -122,11 +122,14 @@ async function createQuestion(request: Request, env: Env): Promise<Response> {
   if (!parsed.ok) return parsed.response;
   const body = parsed.data;
 
-  if (!body.question || !body.answer) {
+  if (typeof body.question !== 'string' || typeof body.answer !== 'string' || !body.question.trim() || !body.answer.trim()) {
     return error('题目和答案不能为空');
   }
+  if (body.type !== undefined && body.type !== null && typeof body.type !== 'string') return error('题型(type)必须为字符串');
+  if (body.options !== undefined && body.options !== null && typeof body.options !== 'string') return error('选项(options)必须为字符串');
 
   const { normalized, hash } = await normalizeAndHash(body.question);
+  if (!normalized) return error('题目内容无效（去除格式标记后为空）');
 
   // 前置检查：给出友好提示
   const existing = await env.DB.prepare('SELECT id FROM questions WHERE question_hash = ?').bind(hash).first();
@@ -158,12 +161,22 @@ async function updateQuestion(request: Request, env: Env, id: string): Promise<R
   const existing = await env.DB.prepare('SELECT * FROM questions WHERE id = ?').bind(id).first();
   if (!existing) return error('题目不存在', 404);
 
+  if (body.question !== undefined && (typeof body.question !== 'string' || !body.question.trim())) {
+    return error('题目(question)必须为非空字符串');
+  }
+  if (body.answer !== undefined && (typeof body.answer !== 'string' || !body.answer.trim())) {
+    return error('答案(answer)必须为非空字符串');
+  }
+  if (body.type !== undefined && body.type !== null && typeof body.type !== 'string') return error('题型(type)必须为字符串');
+  if (body.options !== undefined && body.options !== null && typeof body.options !== 'string') return error('选项(options)必须为字符串');
+
   // 按字段存在性更新，避免部分 PUT 清空字段
   const sets: string[] = ["updated_at = datetime('now')"];
   const params: unknown[] = [];
 
   if (body.question !== undefined) {
     const { normalized, hash } = await normalizeAndHash(body.question);
+    if (!normalized) return error('题目内容无效（去除格式标记后为空）');
     // 撞库检查（排除自身）
     const conflict = await env.DB.prepare(
       'SELECT id FROM questions WHERE question_hash = ? AND id <> ?'
@@ -177,7 +190,15 @@ async function updateQuestion(request: Request, env: Env, id: string): Promise<R
   if (body.options !== undefined) { sets.push('options = ?'); params.push(body.options); }
   params.push(id);
 
-  await env.DB.prepare(`UPDATE questions SET ${sets.join(', ')} WHERE id = ?`).bind(...params).run();
+  try {
+    await env.DB.prepare(`UPDATE questions SET ${sets.join(', ')} WHERE id = ?`).bind(...params).run();
+  } catch (err) {
+    // 检查与更新之间的并发竞态撞 UNIQUE 时转成友好错误，而非 500
+    if (err instanceof Error && /UNIQUE constraint failed/i.test(err.message)) {
+      return error('与其他题目冲突（归一化后哈希重复）');
+    }
+    throw err;
+  }
 
   return json({ msg: '更新成功' });
 }
@@ -200,7 +221,7 @@ async function importQuestions(request: Request, env: Env): Promise<Response> {
   let items: Array<{ question: string; answer: string; type?: string; options?: string }>;
 
   if (body.format === 'csv') {
-    // 简单 CSV 解析：question,answer,type,options
+    // CSV 解析：question,answer,type,options（支持引号内换行/逗号）
     items = parseCSV(body.content);
   } else {
     // JSON
@@ -214,30 +235,47 @@ async function importQuestions(request: Request, env: Env): Promise<Response> {
   if (!Array.isArray(items) || items.length === 0) {
     return error('没有可导入的题目');
   }
+  if (items.length > 5000) {
+    return error('单次最多导入 5000 条，请分批导入');
+  }
 
-  let imported = 0;
+  const stmts: D1PreparedStatement[] = [];
   let skipped = 0;
 
   for (const item of items) {
-    if (!item.question || !item.answer) {
+    // 类型/空值/归一化校验：非法条目跳过并计数，不中断整体导入
+    if (typeof item?.question !== 'string' || typeof item?.answer !== 'string' || !item.question.trim() || !item.answer.trim()) {
       skipped++;
       continue;
     }
+    if (item.type !== undefined && item.type !== null && typeof item.type !== 'string') { skipped++; continue; }
+    if (item.options !== undefined && item.options !== null && typeof item.options !== 'string') { skipped++; continue; }
 
     const { normalized, hash } = await normalizeAndHash(item.question);
+    if (!normalized) { skipped++; continue; }
 
-    // ON CONFLICT 兑底并发/重复，meta.changes=0 视为跳过
-    const result = await env.DB.prepare(
-      `INSERT INTO questions (id, question, question_norm, question_hash, answer, type, options, source)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'import')
-       ON CONFLICT(question_hash) DO NOTHING`
-    ).bind(
-      uuid(), item.question, normalized, hash, item.answer,
-      item.type || null, item.options || null
-    ).run();
-
-    if (result.meta.changes) imported++; else skipped++;
+    stmts.push(
+      env.DB.prepare(
+        `INSERT INTO questions (id, question, question_norm, question_hash, answer, type, options, source)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'import')
+         ON CONFLICT(question_hash) DO NOTHING`
+      ).bind(
+        uuid(), item.question, normalized, hash, item.answer,
+        item.type || null, item.options || null
+      )
+    );
   }
+
+  // 分块 batch：一次往返写一批，避免逐条 await 的数千次 D1 往返
+  let imported = 0;
+  const CHUNK = 50;
+  for (let i = 0; i < stmts.length; i += CHUNK) {
+    const results = await env.DB.batch(stmts.slice(i, i + CHUNK));
+    for (const r of results) {
+      if (r.meta.changes) imported++;
+    }
+  }
+  skipped += stmts.length - imported; // 批内因哈希重复（ON CONFLICT）未写入的
 
   return json({ imported, skipped, total: items.length, msg: `导入 ${imported} 条，跳过 ${skipped} 条` });
 }
@@ -292,60 +330,68 @@ async function exportQuestions(env: Env, url: URL): Promise<Response> {
   });
 }
 
-/** 简单 CSV 解析 */
-function parseCSV(csv: string): Array<{ question: string; answer: string; type?: string; options?: string }> {
-  // 统一换行：处理 \r\n / \r
-  const lines = csv.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n').filter(l => l.trim());
-  if (lines.length < 2) return [];
-
-  const result: Array<{ question: string; answer: string; type?: string; options?: string }> = [];
-
-  for (let i = 1; i < lines.length; i++) {
-    const fields = parseCSVLine(lines[i]);
-    if (fields.length >= 2) {
-      result.push({
-        question: fields[0],
-        answer: fields[1],
-        type: fields[2] || undefined,
-        options: fields[3] || undefined,
-      });
-    }
-  }
-
-  return result;
+/** CSV 单条记录 */
+export interface CSVRecord {
+  question: string;
+  answer: string;
+  type?: string;
+  options?: string;
 }
 
-/** 解析单行 CSV（支持双引号转义） */
-function parseCSVLine(line: string): string[] {
-  const result: string[] = [];
+/**
+ * 解析 CSV 文本（question,answer,type,options），首行为表头。
+ * 标准状态机实现：支持双引号包裹字段、"" 转义、引号内换行/逗号、\r\n 与 BOM。
+ */
+export function parseCSV(csv: string): CSVRecord[] {
+  const text = csv.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
+  const records: string[][] = [];
+  let fields: string[] = [];
   let current = '';
   let inQuotes = false;
 
-  for (let i = 0; i < line.length; i++) {
-    const char = line[i];
+  const pushField = () => { fields.push(current); current = ''; };
+  const pushRecord = () => {
+    pushField();
+    if (fields.some(f => f.trim() !== '')) records.push(fields);
+    fields = [];
+  };
+
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
     if (inQuotes) {
       if (char === '"') {
-        if (line[i + 1] === '"') {
-          current += '"';
-          i++;
-        } else {
-          inQuotes = false;
-        }
+        if (text[i + 1] === '"') { current += '"'; i++; }
+        else inQuotes = false;
       } else {
         current += char;
       }
+    } else if (char === '"') {
+      inQuotes = true;
+    } else if (char === ',') {
+      pushField();
+    } else if (char === '\n') {
+      pushRecord();
     } else {
-      if (char === '"') {
-        inQuotes = true;
-      } else if (char === ',') {
-        result.push(current);
-        current = '';
-      } else {
-        current += char;
-      }
+      current += char;
     }
   }
+  // 末行无换行符的收尾（含未闭合引号的容错）
+  if (current !== '' || fields.length > 0 || inQuotes) pushRecord();
 
-  result.push(current);
+  if (records.length < 2) return [];
+
+  const result: CSVRecord[] = [];
+  for (let i = 1; i < records.length; i++) {
+    const f = records[i];
+    if (f.length >= 2) {
+      result.push({
+        question: f[0],
+        answer: f[1],
+        type: f[2] || undefined,
+        options: f[3] || undefined,
+      });
+    }
+  }
   return result;
 }

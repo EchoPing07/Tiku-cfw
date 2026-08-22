@@ -199,16 +199,32 @@ async function createChannelKey(request: Request, env: Env, channelId: string): 
 }
 
 async function updateChannelKey(request: Request, env: Env, id: string): Promise<Response> {
-  const parsed = await parseJsonBody<{ api_key?: string; name?: string; enabled?: number }>(request);
+  const parsed = await parseJsonBody<{ api_key?: string; name?: string; enabled?: number | boolean }>(request);
   if (!parsed.ok) return parsed.response;
   const body = parsed.data;
 
   const existing = await env.DB.prepare('SELECT id FROM ai_channel_keys WHERE id = ?').bind(id).first();
   if (!existing) return error('密钥不存在', 404);
 
-  await env.DB.prepare(
-    'UPDATE ai_channel_keys SET api_key = ?, name = ?, enabled = ? WHERE id = ?'
-  ).bind(body.api_key || '', body.name || '', body.enabled ?? 1, id).run();
+  // 按字段存在性更新，避免部分 PUT 把 api_key 清空或意外改写 enabled
+  const sets: string[] = [];
+  const params: unknown[] = [];
+  if (body.api_key !== undefined) {
+    if (typeof body.api_key !== 'string' || !body.api_key.trim()) return error('API Key 不能为空');
+    sets.push('api_key = ?'); params.push(body.api_key.trim());
+  }
+  if (body.name !== undefined) {
+    if (typeof body.name !== 'string') return error('备注名(name)必须为字符串');
+    sets.push('name = ?'); params.push(body.name);
+  }
+  if (body.enabled !== undefined) {
+    const enabled = Number(body.enabled) === 1;
+    sets.push('enabled = ?'); params.push(enabled ? 1 : 0);
+  }
+  if (sets.length === 0) return json({ msg: '无更新' });
+  params.push(id);
+
+  await env.DB.prepare(`UPDATE ai_channel_keys SET ${sets.join(', ')} WHERE id = ?`).bind(...params).run();
 
   return json({ msg: '更新成功' });
 }

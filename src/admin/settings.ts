@@ -47,6 +47,13 @@ async function updateSettings(request: Request, env: Env): Promise<Response> {
     if (tz === null) return error('timezone_offset 无效（-720~840 分钟）');
     body.timezone_offset = String(tz);
   }
+  if (body.search_rate_limit !== undefined) {
+    const n = typeof body.search_rate_limit === 'number'
+      ? body.search_rate_limit
+      : parseInt(String(body.search_rate_limit), 10);
+    if (!Number.isFinite(n) || n < 0 || n > 1_000_000) return error('search_rate_limit 无效（0~1000000，0=不限流）');
+    body.search_rate_limit = String(Math.floor(n));
+  }
 
   for (const [key, value] of Object.entries(body)) {
     await env.DB.prepare(
@@ -55,8 +62,8 @@ async function updateSettings(request: Request, env: Env): Promise<Response> {
     ).bind(key, value, value).run();
   }
 
-  // 刷新 CORS 缓存
-  await refreshCorsConfig(env.DB);
+  // 强制刷新 CORS 缓存：跳过 TTL 立即重读，使新 origin 列表即时生效（其余 isolate 最多滞后 60s）
+  await refreshCorsConfig(env.DB, true);
 
   return json({ msg: '设置已保存' });
 }

@@ -20,8 +20,10 @@ export function parseAIAnswer(raw: string, type?: QuestionType): string {
 
   // 4. 如果是选择题且答案以字母开头，规范化
   if ((type === 'single' || type === 'multiple' || !type) && /^[A-Z]/i.test(answer)) {
+    // 未指定题型时，TRUE/FALSE/T/F 等判断题式单词不拆字母（否则 "T" → "T#R#U#E"），交给下方判断题归一化
+    const skipForJudgement = !(type === 'single' || type === 'multiple') && isJudgementAnswer(answer);
     // 如果答案只是字母组合（如 "AB" 或 "A, B, C"）
-    if (answer.replace(/[,，、\s#]/g, '').match(/^[A-Z]+$/i)) {
+    if (!skipForJudgement && answer.replace(/[,，、\s#]/g, '').match(/^[A-Z]+$/i)) {
       const letters = answer.match(/[A-Z]/gi);
       if (letters && letters.length > 0) {
         return letters.join('#').toUpperCase();

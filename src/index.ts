@@ -85,13 +85,13 @@ async function route(request: Request, env: Env): Promise<Response> {
 
     return json({ code: -1, msg: '接口不存在' }, 404);
   } catch (err) {
+    // 对外统一文案，内部错误细节只进日志，避免向客户端泄露 D1/SQL 信息
     console.error('Unhandled error:', err);
-    const errMsg = err instanceof Error ? err.message : '服务器内部错误';
-    return json({ code: -1, msg: errMsg }, 500);
+    return json({ code: -1, msg: '服务器内部错误' }, 500);
   }
 }
 
-/** 按设置清理过期搜索日志（由定时任务触发） */
+/** 按设置清理过期搜索日志与限流计数（由定时任务触发） */
 async function purgeOldLogs(env: Env): Promise<void> {
   let days = 0;
   try {
@@ -101,6 +101,11 @@ async function purgeOldLogs(env: Env): Promise<void> {
   if (days > 0) {
     await env.DB.prepare("DELETE FROM search_logs WHERE created_at < datetime('now', ?)").bind(`-${days} days`).run();
   }
+  // 清理超过 1 天未更新的限流窗口行（0006 未执行时忽略）
+  try {
+    const cutoff = Math.floor(Date.now() / 1000) - 86_400;
+    await env.DB.prepare('DELETE FROM rate_limits WHERE CAST(window_start AS INTEGER) < ?').bind(cutoff).run();
+  } catch { /* 未执行 0006 迁移时忽略 */ }
 }
 
 export default {
@@ -113,8 +118,7 @@ export default {
       res = await route(request, env);
     } catch (err) {
       console.error('Unhandled error:', err);
-      const errMsg = err instanceof Error ? err.message : '服务器内部错误';
-      res = json({ code: -1, msg: errMsg }, 500);
+      res = json({ code: -1, msg: '服务器内部错误' }, 500);
     }
     // 统一注入动态 CORS 头（依据请求 Origin 与配置的 cors_origins）
     return applyCors(request, res);

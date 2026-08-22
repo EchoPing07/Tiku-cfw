@@ -120,7 +120,11 @@ npm run db:migrate:local   # 本地建表
 npm run db:seed:local      # 写入初始数据
 npm run db:migrate:share:local  # 密钥分享功能（0004，可选）
 npm run db:migrate:token:local  # Token 用量统计（0005，可选，不执行则仪表盘 Token 显示为 0）
+npm run db:migrate:rate:local   # 登录/搜题限流（0006，可选，不执行则限流不生效）
 npm run dev                 # 启动开发服务器 → http://localhost:8787
+
+npm test                    # 单元测试
+npm run typecheck           # 类型检查
 ```
 
 默认密码 `password`。
@@ -128,6 +132,15 @@ npm run dev                 # 启动开发服务器 → http://localhost:8787
 ### 密钥分享链接
 
 管理面板「题库密钥」页面可为每个密钥单独开启「分享 OCS 配置」开关，开启后生成免登录链接（`/share.html?token=...`），打开即可查看并复制完整的 OCS 配置。关闭开关或密钥被禁用/过期后链接立即失效。注意：配置中包含题库密钥，请勿将链接转发给他人。
+
+---
+
+## 安全须知
+
+- **密钥明文存储**：题库密钥与各 AI 渠道的 API Key 以明文保存在 D1 数据库中，管理面板可直接查看。拿到 D1 访问权即拿到全部密钥，请勿将 D1 凭据泄露给他人；建议为 AI 渠道使用可设置消费上限、可随时作废的独立 Key，并定期轮换。
+- **分享链接即密钥**：开启「分享 OCS 配置」后，链接内含题库密钥，任何拿到链接的人都能消耗你的 AI 额度。仅在必要时开启，用完及时关闭（关闭后链接立即失效）。
+- **接口限流**：登录接口按 IP 限流（5 分钟 10 次尝试）；搜题接口按密钥限流（默认每分钟 120 次，可在「系统设置 → 搜题限流」调整，0 = 不限流）。持续收到 429 请检查客户端是否异常重试。限流依赖迁移 0006，未执行时自动放行。
+- 生产环境务必通过 Cloudflare 控制台或 `wrangler secret put` 设置 `ADMIN_PASSWORD` 与 `JWT_SECRET`，不要使用默认值。
 
 ---
 

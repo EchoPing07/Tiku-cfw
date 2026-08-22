@@ -4,6 +4,7 @@ import { requireAuth } from '../auth/middleware';
 import { uuid, generateApiKey, randomHex } from '../utils/id';
 import { parseJsonBody } from '../utils/request';
 import { buildOCSConfig } from '../utils/ocs';
+import { validateExpiry } from '../utils/expiry';
 
 /** 题库密钥管理路由 */
 export async function keysHandler(request: Request, env: Env, path: string): Promise<Response> {
@@ -67,13 +68,17 @@ async function createKey(request: Request, env: Env): Promise<Response> {
   if (!parsed.ok) return parsed.response;
   const body = parsed.data;
 
+  // 过期时间格式校验，脏值不再静默变成"永不过期"
+  const exp = validateExpiry(body.expires_at);
+  if (!exp.valid) return error('过期时间格式无效，应为 YYYY-MM-DD');
+
   const id = uuid();
   const key = generateApiKey();
 
   await env.DB.prepare(
     `INSERT INTO api_keys (id, key, name, enabled, expires_at)
      VALUES (?, ?, ?, 1, ?)`
-  ).bind(id, key, body.name || '', body.expires_at || null).run();
+  ).bind(id, key, body.name || '', exp.value).run();
 
   return json({ id, key, msg: '创建成功' });
 }
@@ -94,7 +99,12 @@ async function updateKey(request: Request, env: Env, id: string): Promise<Respon
   let shareToken: string | null | undefined;
   if (body.name !== undefined) { sets.push('name = ?'); params.push(body.name); }
   if (body.enabled !== undefined) { sets.push('enabled = ?'); params.push(body.enabled); }
-  if (body.expires_at !== undefined) { sets.push('expires_at = ?'); params.push(body.expires_at || null); }
+  if (body.expires_at !== undefined) {
+    // 格式校验：空串/null 表示显式清除（永不过期），非法格式直接拒绝
+    const exp = validateExpiry(body.expires_at);
+    if (!exp.valid) return error('过期时间格式无效，应为 YYYY-MM-DD');
+    sets.push('expires_at = ?'); params.push(exp.value);
+  }
   // 分享开关：开启时生成全新令牌，关闭时清空令牌使链接立即失效
   // 严格判定：仅数值 1 视为开启，避免 "0"/"false"/true 等宽松真值误开启
   if (body.share_enabled !== undefined) {

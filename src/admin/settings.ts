@@ -3,6 +3,7 @@ import { json, error, options } from '../utils/response';
 import { requireAuth } from '../auth/middleware';
 import { refreshCorsConfig } from '../utils/cors';
 import { parseJsonBody } from '../utils/request';
+import { parseTimezoneOffset } from '../utils/timezone';
 
 /** 系统设置路由 */
 export async function settingsHandler(request: Request, env: Env, path: string): Promise<Response> {
@@ -39,6 +40,13 @@ async function updateSettings(request: Request, env: Env): Promise<Response> {
   const parsed = await parseJsonBody<Record<string, string>>(request);
   if (!parsed.ok) return parsed.response;
   const body = parsed.data;
+
+  // 先校验再写入，避免部分写入后因非法值失败
+  if (body.timezone_offset !== undefined) {
+    const tz = parseTimezoneOffset(body.timezone_offset);
+    if (tz === null) return error('timezone_offset 无效（-720~840 分钟）');
+    body.timezone_offset = String(tz);
+  }
 
   for (const [key, value] of Object.entries(body)) {
     await env.DB.prepare(

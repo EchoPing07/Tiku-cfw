@@ -9,7 +9,8 @@ INSERT OR IGNORE INTO settings (key, value, description) VALUES
     ('ai_timeout',          '30',        'AI 请求超时秒数'),
     ('key_fail_threshold',  '3',         'Key 连续失败禁用阈值'),
     ('cors_origins',        '*',         'CORS 允许的域名'),
-    ('system_prompt',       '',          '自定义系统提示词（空=用默认）');
+    ('system_prompt',       '',          '自定义系统提示词（空=用默认）'),
+    ('timezone_offset',     '480',       '统计时区偏移分钟数（480=北京时间 UTC+8）');
 
 -- 默认 AI 渠道示例（用户需在面板中填写 API Key）
 INSERT OR IGNORE INTO ai_channels (id, name, type, base_url, model, weight, temperature, max_tokens, enabled) VALUES

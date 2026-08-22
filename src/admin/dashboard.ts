@@ -1,6 +1,7 @@
 import type { Env } from '../types/env';
 import { json, options } from '../utils/response';
 import { requireAuth } from '../auth/middleware';
+import { getTimezoneOffsetMinutes, tzLabel, tzModifier, localDayStartUTC } from '../utils/timezone';
 
 /** 统计聚合行（今日/本周通用） */
 interface UsageAgg {
@@ -33,6 +34,12 @@ export async function dashboardHandler(request: Request, env: Env): Promise<Resp
     ? ', SUM(total_tokens) AS tokens, SUM(prompt_tokens) AS prompt, SUM(completion_tokens) AS completion'
     : ', 0 AS tokens, 0 AS prompt, 0 AS completion';
 
+  // 统计时区（默认北京时间）。今日边界按本地零点折算回 UTC 绑定参数，可走 created_at 索引
+  const tzMin = await getTimezoneOffsetMinutes(env);
+  const now = new Date();
+  const todayStart = localDayStartUTC(now, tzMin);
+  const trendStart = localDayStartUTC(now, tzMin, 13);
+
   const usageAggSQL = `
     SELECT COUNT(*) AS total,
       SUM(from_cache) AS cached,
@@ -44,11 +51,11 @@ export async function dashboardHandler(request: Request, env: Env): Promise<Resp
     await Promise.all([
       // 题目总数
       db.prepare('SELECT COUNT(*) AS count FROM questions').first<{ count: number }>(),
-      // 今日新增题目（created_at >= 今日0点，等价 date(created_at)=date('now') 且可走索引）
-      db.prepare('SELECT COUNT(*) AS count FROM questions WHERE created_at >= date(\'now\')').first<{ count: number }>(),
-      // 今日查询统计
-      db.prepare(usageAggSQL + "created_at >= date('now')").first<UsageAgg>(),
-      // 7 天查询统计
+      // 今日新增题目（本地日零点起）
+      db.prepare('SELECT COUNT(*) AS count FROM questions WHERE created_at >= ?').bind(todayStart).first<{ count: number }>(),
+      // 今日查询统计（本地日零点起）
+      db.prepare(usageAggSQL + 'created_at >= ?').bind(todayStart).first<UsageAgg>(),
+      // 近 7 天查询统计（滚动 24h×7，与时区无关）
       db.prepare(usageAggSQL + "created_at >= datetime('now', '-7 days')").first<UsageAgg>(),
       // 题型分布
       db.prepare('SELECT type, COUNT(*) AS count FROM questions GROUP BY type ORDER BY count DESC').all<{ type: string; count: number }>(),
@@ -69,13 +76,13 @@ export async function dashboardHandler(request: Request, env: Env): Promise<Resp
       db.prepare('SELECT type, COUNT(*) AS total, SUM(enabled) AS enabled FROM ai_channels GROUP BY type').all<{ type: string; total: number; enabled: number | null }>(),
       // 渠道密钥汇总
       db.prepare('SELECT COUNT(*) AS total, SUM(enabled) AS enabled FROM ai_channel_keys').first<{ total: number; enabled: number | null }>(),
-      // 近 14 天趋势（按天聚合）
+      // 近 14 天趋势（按本地日聚合：created_at + 偏移后取日期）
       db.prepare(
-        `SELECT date(created_at) AS d, COUNT(*) AS req,
+        `SELECT date(created_at, ?) AS d, COUNT(*) AS req,
            SUM(CASE WHEN from_cache = 0 AND found = 1 THEN 1 ELSE 0 END) AS ai${hasTokens ? ', SUM(total_tokens) AS tokens' : ', 0 AS tokens'}
-         FROM search_logs WHERE created_at >= date('now', '-13 days')
+         FROM search_logs WHERE created_at >= ?
          GROUP BY d ORDER BY d`
-      ).all<{ d: string; req: number; ai: number | null; tokens: number | null }>(),
+      ).bind(tzModifier(tzMin), trendStart).all<{ d: string; req: number; ai: number | null; tokens: number | null }>(),
       // 近 7 天错误记录
       db.prepare(
         `SELECT question, ai_channel, ai_model, error, created_at
@@ -91,6 +98,7 @@ export async function dashboardHandler(request: Request, env: Env): Promise<Resp
   const tok = (v: number | null | undefined) => Number(v || 0);
 
   return json({
+    timezone: { offsetMinutes: tzMin, label: tzLabel(tzMin) },
     stats: {
       // 题库
       totalQuestions: totalQuestions?.count || 0,

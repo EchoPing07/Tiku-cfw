@@ -37,11 +37,11 @@ function shuffle<T>(arr: T[]): T[] {
   return result;
 }
 
-/** 多渠道 AI 调度器 */
+/** 多模型 AI 调度器 */
 export async function dispatchAI(opts: DispatchOptions): Promise<DispatchResult> {
   const { title, type, options, images, env } = opts;
 
-  // 判断渠道类型
+  // 判断模型类型（文本/视觉）
   const channelType: ChannelType = images && images.length > 0 ? 'vision' : 'text';
 
   // 读取设置（一次性查询，减少 D1 往返）
@@ -74,14 +74,14 @@ export async function dispatchAI(opts: DispatchOptions): Promise<DispatchResult>
     ];
   }
 
-  // 查询该类型下所有启用的渠道，按 weight DESC 排序
+  // 查询该类型下所有启用的模型，按 weight DESC 排序
   const channels = await env.DB.prepare(
     'SELECT * FROM ai_channels WHERE type = ? AND enabled = 1 ORDER BY weight DESC'
   ).bind(channelType).all<AIChannelRow>();
 
   if (!channels.results || channels.results.length === 0) {
     throw new AIError(
-      `没有可用的${channelType === 'text' ? '文本' : '视觉'}渠道`,
+      `没有可用的${channelType === 'text' ? '文本' : '视觉'}模型`,
       JSON.stringify(messages, null, 2)
     );
   }
@@ -89,7 +89,7 @@ export async function dispatchAI(opts: DispatchOptions): Promise<DispatchResult>
   // 按权重分组
   const weightGroups = groupByWeight(channels.results);
 
-  // 一次性查询所有渠道下的启用 key，按 channel_id 分组（避免 N+1 查询）
+  // 一次性查询所有模型下的启用 key，按 channel_id 分组（避免 N+1 查询）
   const channelIds = channels.results.map(c => c.id);
   const keysByChannel = new Map<string, AIChannelKeyRow[]>();
   if (channelIds.length > 0) {
@@ -120,7 +120,7 @@ export async function dispatchAI(opts: DispatchOptions): Promise<DispatchResult>
 
     for (const channel of shuffledChannels) {
       const keys = keysByChannel.get(channel.id) || [];
-      if (keys.length === 0) continue; // 此渠道无可用 key，跳过
+      if (keys.length === 0) continue; // 此模型无可用 key，跳过
 
       // 依次尝试每个 key
       for (const key of keys) {
@@ -182,18 +182,18 @@ export async function dispatchAI(opts: DispatchOptions): Promise<DispatchResult>
           continue;
         }
       }
-      // 此渠道所有 key 都失败，尝试下一个渠道
+      // 此模型所有 key 都失败，尝试下一个模型
     }
-    // 此权重组所有渠道都失败，尝试下一个权重组
+    // 此权重组所有模型都失败，尝试下一个权重组
   }
 
-  // 所有渠道都失败，携带错误详情便于排查
+  // 所有模型都失败，携带错误详情便于排查
   // 优先使用第一个错误（根因），如果只有一个错误则 lastError === firstError
   const errorMsg = firstError
     ? (firstError === lastError
-      ? `所有 AI 渠道均不可用（${firstError}）`
-      : `所有 AI 渠道均不可用（首次错误：${firstError}；最后错误：${lastError}）`)
-    : '所有 AI 渠道均不可用';
+      ? `所有模型均不可用（${firstError}）`
+      : `所有模型均不可用（首次错误：${firstError}；最后错误：${lastError}）`)
+    : '所有模型均不可用';
   throw new AIError(
     errorMsg,
     firstRawRequest || lastRawRequest || undefined,

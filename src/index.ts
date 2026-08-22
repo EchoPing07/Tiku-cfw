@@ -68,7 +68,7 @@ async function route(request: Request, env: Env): Promise<Response> {
       return settingsHandler(request, env, path);
     }
 
-    // 调试搜题（管理面板搜题测试页）
+    // 在线搜题（管理面板）
     if (path === '/api/admin/debug/search') {
       return debugSearchHandler(request, env);
     }

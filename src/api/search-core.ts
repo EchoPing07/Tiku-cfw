@@ -87,7 +87,7 @@ async function insertSearchLog(env: Env, r: LogRow): Promise<void> {
 
 /**
  * 搜题核心流程：归一化 → 查缓存 → 未命中调 AI → 写缓存/日志。
- * apiKeyId 为 null 时（调试控制台）不更新 API 密钥使用统计。
+ * apiKeyId 为 null 时（管理面板在线搜题）不更新题库密钥使用统计。
  */
 export async function performSearch(env: Env, input: SearchInput, apiKeyId: string | null): Promise<SearchCoreResult> {
   const title = input.title.trim();
@@ -173,7 +173,7 @@ export async function performSearch(env: Env, input: SearchInput, apiKeyId: stri
   } catch (err) {
     const durationMs = Date.now() - startTime;
     const errMsg = err instanceof Error ? err.message : String(err);
-    // AI 调度错误携带原始请求/响应与首个失败渠道，便于日志排查与渠道归因
+    // AI 调度错误携带原始请求/响应与首个失败模型，便于日志排查与模型归因
     const rawRequest = err instanceof AIError ? (err.rawRequest || null) : null;
     const rawResponse = err instanceof AIError ? (err.rawResponse || null) : null;
     const failChannel = err instanceof AIError ? (err.channel || null) : null;

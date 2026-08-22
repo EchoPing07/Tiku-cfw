@@ -6,21 +6,21 @@ import { uuid } from '../utils/id';
 import { parseJsonBody } from '../utils/request';
 import { callOpenAI } from '../ai/openai-client';
 
-/** AI 渠道管理路由 */
+/** 模型管理路由（数据库表沿用 ai_channels） */
 export async function channelsHandler(request: Request, env: Env, path: string): Promise<Response> {
   if (request.method === 'OPTIONS') return options();
 
   const authFail = await requireAuth(request, env);
   if (authFail) return authFail;
 
-  // /api/admin/channels - 渠道列表/创建
+  // /api/admin/channels - 模型列表/创建
   if (path === '/api/admin/channels') {
     if (request.method === 'GET') return listChannels(env);
     if (request.method === 'POST') return createChannel(request, env);
     return error('不支持的方法', 405);
   }
 
-  // /api/admin/channels/:id - 渠道详情/编辑/删除
+  // /api/admin/channels/:id - 模型详情/编辑/删除
   const channelMatch = path.match(/^\/api\/admin\/channels\/([^/]+)$/);
   if (channelMatch) {
     const id = channelMatch[1];
@@ -30,7 +30,7 @@ export async function channelsHandler(request: Request, env: Env, path: string):
     return error('不支持的方法', 405);
   }
 
-  // /api/admin/channels/:id/keys - 渠道下密钥列表/创建
+  // /api/admin/channels/:id/keys - 模型下 API Key 列表/创建
   const channelKeysMatch = path.match(/^\/api\/admin\/channels\/([^/]+)\/keys$/);
   if (channelKeysMatch) {
     const channelId = channelKeysMatch[1];
@@ -39,14 +39,14 @@ export async function channelsHandler(request: Request, env: Env, path: string):
     return error('不支持的方法', 405);
   }
 
-  // /api/admin/channels/:id/test - 测试渠道连通性
+  // /api/admin/channels/:id/test - 测试模型连通性
   const testMatch = path.match(/^\/api\/admin\/channels\/([^/]+)\/test$/);
   if (testMatch) {
     if (request.method === 'POST') return testChannelConnection(env, testMatch[1]);
     return error('不支持的方法', 405);
   }
 
-  // /api/admin/channel-keys/:id - 密钥编辑/删除/重置
+  // /api/admin/channel-keys/:id - API Key 编辑/删除/重置
   const keyMatch = path.match(/^\/api\/admin\/channel-keys\/([^/]+)$/);
   if (keyMatch) {
     const id = keyMatch[1];
@@ -66,7 +66,7 @@ export async function channelsHandler(request: Request, env: Env, path: string):
   return error('接口不存在', 404);
 }
 
-// ============ 渠道 CRUD ============
+// ============ 模型 CRUD ============
 
 async function listChannels(env: Env): Promise<Response> {
   const result = await env.DB.prepare(
@@ -83,7 +83,7 @@ async function listChannels(env: Env): Promise<Response> {
 
 async function getChannel(env: Env, id: string): Promise<Response> {
   const channel = await env.DB.prepare('SELECT * FROM ai_channels WHERE id = ?').bind(id).first();
-  if (!channel) return error('渠道不存在', 404);
+  if (!channel) return error('模型不存在', 404);
   const keys = await env.DB.prepare('SELECT * FROM ai_channel_keys WHERE channel_id = ?').bind(id).all();
   return json({ ...channel, keys: keys.results || [] });
 }
@@ -127,7 +127,7 @@ async function updateChannel(request: Request, env: Env, id: string): Promise<Re
   const body = parsed.data;
 
   const existing = await env.DB.prepare('SELECT id FROM ai_channels WHERE id = ?').bind(id).first();
-  if (!existing) return error('渠道不存在', 404);
+  if (!existing) return error('模型不存在', 404);
 
   if (body.type !== undefined && !['text', 'vision'].includes(body.type)) return error('类型必须为 text 或 vision');
   if (body.weight !== undefined && (!Number.isFinite(body.weight) || body.weight < 1)) return error('weight 必须 >= 1');
@@ -153,18 +153,18 @@ async function updateChannel(request: Request, env: Env, id: string): Promise<Re
 }
 
 async function deleteChannel(env: Env, id: string): Promise<Response> {
-  // 删除渠道和关联的密钥（CASCADE）
+  // 删除模型和关联的 API Key（CASCADE）
   await env.DB.prepare('DELETE FROM ai_channel_keys WHERE channel_id = ?').bind(id).run();
   const result = await env.DB.prepare('DELETE FROM ai_channels WHERE id = ?').bind(id).run();
-  if (!result.meta.changes) return error('渠道不存在', 404);
+  if (!result.meta.changes) return error('模型不存在', 404);
   return json({ msg: '删除成功' });
 }
 
-// ============ 渠道密钥 CRUD ============
+// ============ 模型 API Key CRUD ============
 
 async function listChannelKeys(env: Env, channelId: string): Promise<Response> {
   if (channelId === 'all') {
-    // 返回所有渠道密钥，带渠道名
+    // 返回所有模型的 API Key，带模型名称
     const result = await env.DB.prepare(
       `SELECT k.*, c.name as channel_name
        FROM ai_channel_keys k
@@ -186,9 +186,9 @@ async function createChannelKey(request: Request, env: Env, channelId: string): 
 
   if (!body.api_key) return error('API Key 不能为空');
 
-  // 检查渠道是否存在
+  // 检查模型是否存在
   const channel = await env.DB.prepare('SELECT id FROM ai_channels WHERE id = ?').bind(channelId).first();
-  if (!channel) return error('渠道不存在', 404);
+  if (!channel) return error('模型不存在', 404);
 
   const id = uuid();
   await env.DB.prepare(
@@ -230,7 +230,7 @@ async function resetChannelKey(env: Env, id: string): Promise<Response> {
   return json({ msg: '已重置' });
 }
 
-// ============ 渠道连通性测试 ============
+// ============ 模型连通性测试 ============
 
 /** 掩码密钥：保留前 6 位与后 4 位 */
 function maskKey(key: string): string {
@@ -249,13 +249,14 @@ interface KeyTestResult {
 }
 
 /**
- * 测试渠道连通性：对渠道下每个密钥发一次极小的真实补全请求。
- * 测试通过的密钥自动清除失败计数并重新启用（带验证的自愈）；
+ * 测试模型连通性：对模型下每个 API Key 发一次轻量的真实补全请求（"hi"，1024 token 上限）。
+ * 推理模型即使回复为空（思考占满 token 预算）也视为连通正常。
+ * 测试通过的 API Key 自动清除失败计数并重新启用（带验证的自愈）；
  * 测试失败不累加 fail_count（人工测试不应触发自动禁用）。
  */
 async function testChannelConnection(env: Env, id: string): Promise<Response> {
   const channel = await env.DB.prepare('SELECT * FROM ai_channels WHERE id = ?').bind(id).first<AIChannelRow>();
-  if (!channel) return error('渠道不存在', 404);
+  if (!channel) return error('模型不存在', 404);
 
   const keys = await env.DB.prepare(
     'SELECT * FROM ai_channel_keys WHERE channel_id = ? ORDER BY enabled DESC, use_count ASC'
@@ -263,21 +264,22 @@ async function testChannelConnection(env: Env, id: string): Promise<Response> {
 
   const keyRows = keys.results || [];
   if (keyRows.length === 0) {
-    return json({ code: 1, ok: false, msg: '渠道下没有密钥，请先添加', keys: [] });
+    return json({ code: 1, ok: false, msg: '模型下没有 API Key，请先添加', keys: [] });
   }
 
-  // 并行测试所有密钥，避免串行时多个超时密钥把总耗时拉到 N×15s
+  // 并行测试所有 API Key，避免串行时多个超时 Key 把总耗时拉到 N×15s
   const results = await Promise.all(keyRows.map(async (k): Promise<KeyTestResult> => {
     const start = Date.now();
     try {
       const r = await callOpenAI({
-        messages: [{ role: 'user', content: 'ping' }],
+        messages: [{ role: 'user', content: 'hi' }],
         baseUrl: channel.base_url as string,
         apiKey: k.api_key as string,
         model: channel.model as string,
         temperature: 0,
-        maxTokens: 16,
+        maxTokens: 1024,
         timeout: 15,
+        allowEmptyContent: true,
       });
       return {
         key_id: k.id, name: k.name || '', masked: maskKey(k.api_key as string),
@@ -292,7 +294,7 @@ async function testChannelConnection(env: Env, id: string): Promise<Response> {
     }
   }));
 
-  // 测试通过的密钥自愈：清除失败计数并重新启用（带验证的重置）
+  // 测试通过的 API Key 自愈：清除失败计数并重新启用（带验证的重置）
   await Promise.all(
     results.filter(r => r.ok).map(r =>
       env.DB.prepare('UPDATE ai_channel_keys SET fail_count = 0, enabled = 1 WHERE id = ?').bind(r.key_id).run()
@@ -303,7 +305,7 @@ async function testChannelConnection(env: Env, id: string): Promise<Response> {
   return json({
     code: 1,
     ok,
-    msg: ok ? '连接正常' : '全部密钥不可用',
+    msg: ok ? '连接正常' : '全部 API Key 不可用',
     keys: results,
   });
 }

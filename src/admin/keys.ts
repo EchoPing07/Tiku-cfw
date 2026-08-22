@@ -5,7 +5,7 @@ import { uuid, generateApiKey, randomHex } from '../utils/id';
 import { parseJsonBody } from '../utils/request';
 import { buildOCSConfig } from '../utils/ocs';
 
-/** API 密钥管理路由 */
+/** 题库密钥管理路由 */
 export async function keysHandler(request: Request, env: Env, path: string): Promise<Response> {
   if (request.method === 'OPTIONS') return options();
 

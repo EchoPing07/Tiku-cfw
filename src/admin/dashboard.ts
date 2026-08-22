@@ -64,7 +64,7 @@ export async function dashboardHandler(request: Request, env: Env): Promise<Resp
         `SELECT question, found, from_cache, ai_channel, ai_model, error, created_at${hasTokens ? ', prompt_tokens, completion_tokens, total_tokens' : ''}
          FROM search_logs ORDER BY created_at DESC LIMIT 10`
       ).all(),
-      // 近 7 天渠道用量
+      // 近 7 天模型用量
       db.prepare(
         `SELECT ai_channel AS name, COUNT(*) AS requests, SUM(found) AS success,
            AVG(duration_ms) AS avg_ms${hasTokens ? ', SUM(total_tokens) AS tokens' : ', 0 AS tokens'}
@@ -72,9 +72,9 @@ export async function dashboardHandler(request: Request, env: Env): Promise<Resp
          WHERE created_at >= datetime('now', '-7 days') AND ai_channel IS NOT NULL
          GROUP BY ai_channel ORDER BY requests DESC`
       ).all<{ name: string; requests: number; success: number | null; avg_ms: number | null; tokens: number | null }>(),
-      // 渠道数量汇总
+      // 模型数量汇总
       db.prepare('SELECT type, COUNT(*) AS total, SUM(enabled) AS enabled FROM ai_channels GROUP BY type').all<{ type: string; total: number; enabled: number | null }>(),
-      // 渠道密钥汇总
+      // 模型 API Key 汇总
       db.prepare('SELECT COUNT(*) AS total, SUM(enabled) AS enabled FROM ai_channel_keys').first<{ total: number; enabled: number | null }>(),
       // 近 14 天趋势（按本地日聚合：created_at + 偏移后取日期）
       db.prepare(
@@ -112,7 +112,7 @@ export async function dashboardHandler(request: Request, env: Env): Promise<Resp
       weekCached: Number(weekStats?.cached || 0),
       weekAI: Number(weekStats?.ai || 0),
       hitRate: pct(weekStats?.cached, weekStats?.total),
-      // AI 消耗
+      // Token 用量
       todayTokens: { prompt: tok(todayStats?.prompt), completion: tok(todayStats?.completion), total: tok(todayStats?.tokens) },
       weekTokens: { prompt: tok(weekStats?.prompt), completion: tok(weekStats?.completion), total: tok(weekStats?.tokens) },
       avgAiLatencyMs: Math.round(Number(weekStats?.avg_ms || 0)),

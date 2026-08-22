@@ -12,10 +12,10 @@ Tiku-cfw 是一个部署在 Cloudflare Workers 上的 AI 题库服务。它接�
 ### 核心特性
 
 - 🔍 **OCS 兼容** — 搜题接口完全兼容 OCS `AnswererWrapper` 规范，配置即用
-- 🤖 **AI 多渠道** — 支持文本/视觉两类模型，多渠道权重调度，最少使用优先轮询，失败自动禁用降级，渠道支持一键测试连通（成功自动恢复密钥）
+- 🤖 **多模型调度** — 支持文本/视觉两类模型，多模型权重调度，最少使用优先轮询，失败自动禁用降级，支持一键测试连通（成功自动恢复 API Key）
 - 💾 **智能缓存** — 题目归一化后精确匹配，命中缓存秒回，永不过期
-- 🖼️ **图片支持** — 带图题目自动路由到视觉模型渠道
-- 📊 **Web 管理面板** — 仪表盘（题库查询 + AI Token 消耗双分区、14 天趋势图）、题库管理、搜题测试调试台、密钥管理、AI 渠道配置、搜索日志（含 Token 用量与答案纠错）
+- 🖼️ **图片支持** — 带图题目自动路由到视觉模型
+- 📊 **Web 管理面板** — 仪表盘（题库查询 + Token 用量双分区、14 天趋势图）、题库管理、在线搜题、题库密钥管理、模型列表配置、搜索日志（含 Token 用量与答案纠错）
 - 🌓 **明暗主题** — 跟随系统或手动切换
 - 🚀 **零成本部署** — Cloudflare Workers 免费额度 + D1 免费额度 + GitHub Actions 自动部署
 
@@ -127,22 +127,22 @@ npm run dev                 # 启动开发服务器 → http://localhost:8787
 
 ### 密钥分享链接
 
-管理面板「API 密钥」页面可为每个密钥单独开启「分享 OCS 配置」开关，开启后生成免登录链接（`/share.html?token=...`），打开即可查看并复制完整的 OCS 配置。关闭开关或密钥被禁用/过期后链接立即失效。注意：配置中包含 API 密钥，请勿将链接转发给他人。
+管理面板「题库密钥」页面可为每个密钥单独开启「分享 OCS 配置」开关，开启后生成免登录链接（`/share.html?token=...`），打开即可查看并复制完整的 OCS 配置。关闭开关或密钥被禁用/过期后链接立即失效。注意：配置中包含题库密钥，请勿将链接转发给他人。
 
 ---
 
 ## 使用指南
 
-### 1. 配置 AI 渠道
+### 1. 配置模型
 
-在管理面板「AI 渠道」页面：
-1. 创建渠道（填写 API 地址、模型名、类型 text/vision、权重）
-2. 在渠道下添加 API Key（支持多 Key 轮询）
-3. 启用渠道
+在管理面板「模型列表」页面：
+1. 添加模型（填写 API 地址、模型 ID、类型 text/vision、权重）
+2. 在模型下添加 API Key（支持多 Key 轮询）
+3. 启用模型
 
-### 2. 创建 API 密钥
+### 2. 创建题库密钥
 
-在管理面板「API 密钥」页面创建密钥 → 点击「复制 OCS 配置」→ 获得完整的 OCS 题库配置 JSON。
+在管理面板「题库密钥」页面创建密钥 → 点击「复制 OCS 配置」→ 获得完整的 OCS 题库配置 JSON。
 
 ### 3. OCS 对接
 
@@ -178,17 +178,17 @@ Content-Type: application/json
 | GET | `/api/admin/questions/by-hash/:hash` | 按归一化哈希查题目（日志纠错用） |
 | POST | `/api/admin/questions/import` | 批量导入 |
 | GET | `/api/admin/questions/export` | 导出 |
-| GET/POST | `/api/admin/keys` | API 密钥管理 |
+| GET/POST | `/api/admin/keys` | 题库密钥管理 |
 | PUT/DELETE | `/api/admin/keys/:id` | 编辑/删除 |
 | GET | `/api/admin/keys/:id/ocs-config` | 获取 OCS 配置（管理面板复制用） |
 | GET | `/api/share/ocs/:token` | 免登录查看 OCS 配置（分享开关开启后有效） |
-| GET/POST | `/api/admin/channels` | AI 渠道管理 |
-| PUT/DELETE | `/api/admin/channels/:id` | 编辑/删除渠道 |
-| POST | `/api/admin/channels/:id/test` | 测试渠道连通性（逐密钥，成功自动恢复） |
-| GET/POST | `/api/admin/channels/:id/keys` | 渠道密钥管理 |
-| PUT/DELETE | `/api/admin/channel-keys/:id` | 编辑/删除密钥 |
+| GET/POST | `/api/admin/channels` | 模型管理 |
+| PUT/DELETE | `/api/admin/channels/:id` | 编辑/删除模型 |
+| POST | `/api/admin/channels/:id/test` | 测试模型连通性（逐 API Key，成功自动恢复） |
+| GET/POST | `/api/admin/channels/:id/keys` | 模型 API Key 管理 |
+| PUT/DELETE | `/api/admin/channel-keys/:id` | 编辑/删除 API Key |
 | POST | `/api/admin/channel-keys/:id/reset` | 重置失败计数 |
-| POST | `/api/admin/debug/search` | 调试搜题（管理面板搜题测试页，走完整链路） |
+| POST | `/api/admin/debug/search` | 在线搜题（管理面板，走完整生产链路） |
 | GET/PUT | `/api/admin/settings` | 系统设置 |
 | GET/DELETE | `/api/admin/logs` | 搜索日志 |
 | GET | `/api/health` | 健康检查 |
@@ -207,8 +207,8 @@ Tiku-cfw/
 ├── src/
 │   ├── index.ts                # Worker 入口，路由分发
 │   ├── api/                    # 搜题接口（OCS + 调试共用核心）+ 健康检查
-│   ├── admin/                  # 管理后台 API（8 个模块，含调试搜题）
-│   ├── ai/                     # AI 多渠道调度器（含 Token 用量采集）
+│   ├── admin/                  # 管理后台 API（8 个模块，含在线搜题）
+│   ├── ai/                     # 多模型调度器（含 Token 用量采集）
 │   ├── cache/                  # 题目归一化 + 哈希
 │   ├── auth/                   # JWT + API Key 认证
 │   ├── types/                  # 类型定义

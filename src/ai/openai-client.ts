@@ -62,7 +62,7 @@ export async function callOpenAI(req: AIRequest): Promise<AIResult> {
   }
 
   let data: {
-    choices?: Array<{ message?: { content?: string } }>;
+    choices?: Array<{ message?: { content?: string; reasoning_content?: string }; finish_reason?: string }>;
     model?: string;
     usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
   };
@@ -72,9 +72,22 @@ export async function callOpenAI(req: AIRequest): Promise<AIResult> {
     throw new AIError('AI 响应 JSON 解析失败', rawRequest, responseText);
   }
 
-  const content = data.choices?.[0]?.message?.content;
+  const choice = data.choices?.[0];
+  const content = choice?.message?.content ?? '';
+  const finishReason = choice?.finish_reason;
+
   if (!content) {
-    throw new AIError('AI 返回内容为空', rawRequest, responseText);
+    // 推理模型的 token 预算可能全部耗在思考段（content 为空 + finish_reason=length 或 reasoning_content 非空），
+    // 此时请求已到达模型并正常生成，连通性测试模式下视为成功
+    const looksLikeTruncatedReasoning =
+      finishReason === 'length' || !!choice?.message?.reasoning_content;
+    if (!(req.allowEmptyContent && looksLikeTruncatedReasoning)) {
+      throw new AIError(
+        `AI 返回内容为空${finishReason ? `（finish_reason=${finishReason}）` : ''}`,
+        rawRequest,
+        responseText
+      );
+    }
   }
 
   // 提取 usage（部分接口可能不返回，此时为 null）

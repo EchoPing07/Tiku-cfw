@@ -4,7 +4,7 @@ import { requireAuth } from '../auth/middleware';
 import { parseJsonBody } from '../utils/request';
 import { performSearch } from '../api/search-core';
 
-/** 调试搜题（管理面板用）：走完整生产链路并返回详细过程信息 */
+/** 在线搜题（管理面板用）：走完整生产链路并返回详细过程信息 */
 export async function debugSearchHandler(request: Request, env: Env): Promise<Response> {
   if (request.method === 'OPTIONS') return options();
 
@@ -23,7 +23,7 @@ export async function debugSearchHandler(request: Request, env: Env): Promise<Re
     return error('题目(title)不能为空');
   }
 
-  // apiKeyId 为 null：不更新 API 密钥统计，其余（缓存/日志/AI 调度）与生产一致
+  // apiKeyId 为 null：不更新题库密钥统计，其余（缓存/日志/模型调度）与生产一致
   const result = await performSearch(env, {
     title: body.title,
     type: body.type,

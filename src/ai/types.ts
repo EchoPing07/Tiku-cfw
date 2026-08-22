@@ -1,7 +1,7 @@
 /** 题目类型 */
 export type QuestionType = 'single' | 'multiple' | 'judgement' | 'completion' | undefined;
 
-/** AI 渠道类型 */
+/** AI 模型类型（text 文本 / vision 视觉） */
 export type ChannelType = 'text' | 'vision';
 
 /** 聊天消息 */
@@ -23,6 +23,8 @@ export interface AIRequest {
   temperature: number;
   maxTokens: number;
   timeout: number;
+  /** 连通性测试模式：content 为空但响应合法（length 截断 / 仅有思考内容）时不视为错误 */
+  allowEmptyContent?: boolean;
 }
 
 /** AI 用量统计（来自 OpenAI 兼容接口的 usage 字段） */
@@ -44,7 +46,7 @@ export interface AIResult {
   rawResponse: string;
 }
 
-/** 数据库行：AI 渠道 */
+/** 数据库行：AI 模型（表 ai_channels） */
 export interface AIChannelRow {
   id: string;
   name: string;
@@ -59,7 +61,7 @@ export interface AIChannelRow {
   updated_at: string;
 }
 
-/** 数据库行：AI 渠道密钥 */
+/** 数据库行：AI 模型的 API Key（表 ai_channel_keys） */
 export interface AIChannelKeyRow {
   id: string;
   channel_id: string;
@@ -85,11 +87,11 @@ export interface DispatchResult {
   rawResponse: string;
 }
 
-/** AI 调度错误（携带原始请求/响应与失败渠道，用于调试与渠道归因） */
+/** AI 调度错误（携带原始请求/响应与失败模型，用于调试与模型归因） */
 export class AIError extends Error {
   rawRequest?: string;
   rawResponse?: string;
-  /** 全部渠道失败时，首个失败的渠道名（通常是根因渠道），用于日志归因 */
+  /** 全部模型失败时，首个失败的模型名（通常是根因），用于日志归因 */
   channel?: string;
   constructor(message: string, rawRequest?: string, rawResponse?: string, channel?: string) {
     super(message);

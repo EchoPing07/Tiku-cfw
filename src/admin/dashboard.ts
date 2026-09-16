@@ -47,7 +47,7 @@ export async function dashboardHandler(request: Request, env: Env): Promise<Resp
       AVG(CASE WHEN from_cache = 0 AND found = 1 THEN duration_ms END) AS avg_ms${tokSum}
     FROM search_logs WHERE `;
 
-  const [totalQuestions, todayNew, todayStats, weekStats, typeDist, recentLogs, channelUsage, channelSummary, keySummary, trend, recentErrors] =
+  const [totalQuestions, todayNew, todayStats, weekStats, typeDist, recentLogs, channelUsage, channelSummary, trend, recentErrors] =
     await Promise.all([
       // 题目总数
       db.prepare('SELECT COUNT(*) AS count FROM questions').first<{ count: number }>(),
@@ -74,8 +74,6 @@ export async function dashboardHandler(request: Request, env: Env): Promise<Resp
       ).all<{ name: string; requests: number; success: number | null; avg_ms: number | null; tokens: number | null }>(),
       // 模型数量汇总
       db.prepare('SELECT type, COUNT(*) AS total, SUM(enabled) AS enabled FROM ai_channels GROUP BY type').all<{ type: string; total: number; enabled: number | null }>(),
-      // 模型 API Key 汇总
-      db.prepare('SELECT COUNT(*) AS total, SUM(enabled) AS enabled FROM ai_channel_keys').first<{ total: number; enabled: number | null }>(),
       // 近 14 天趋势（按本地日聚合：created_at + 偏移后取日期）
       db.prepare(
         `SELECT date(created_at, ?) AS d, COUNT(*) AS req,
@@ -130,7 +128,6 @@ export async function dashboardHandler(request: Request, env: Env): Promise<Resp
     })),
     channelSummary: {
       channels: channelSummary.results || [],
-      keys: { total: Number(keySummary?.total || 0), enabled: Number(keySummary?.enabled || 0) },
     },
     recentLogs: (recentLogs.results || []).map((log: Record<string, unknown>) => ({
       question: log.question,

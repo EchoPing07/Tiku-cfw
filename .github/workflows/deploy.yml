@@ -27,15 +27,11 @@ jobs:
       - name: Inject D1 Database ID
         run: sed -i "s/YOUR_D1_DATABASE_ID/${{ secrets.D1_DATABASE_ID }}/g" wrangler.toml
 
-      - name: Deploy
-        run: npx wrangler deploy
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-
       - name: Run Migrations
-        # 0001/0002/0006 幂等（IF NOT EXISTS / INSERT OR IGNORE / NOT EXISTS 守卫），
-        # 0003/0004/0005/0007 首条为 ALTER 加列，已执行过会报 duplicate column，属正常，用 || 容错跳过
+        # 先迁移后部署：迁移失败则不部署，避免新代码跑在旧 schema 上（搜题全挂的中间态）。
+        # 0001/0002/0006 幂等（IF NOT EXISTS / INSERT OR IGNORE 守卫），
+        # 0003/0004/0005/0007 首条为 ALTER 加列，已执行过会报 duplicate column，属正常，用 || 容错跳过；
+        # 0008 仅 CREATE INDEX IF NOT EXISTS，任何状态可安全重跑
         run: |
           npx wrangler d1 execute tiku-cfw-db --remote --file=migrations/0001_init.sql
           npx wrangler d1 execute tiku-cfw-db --remote --file=migrations/0002_seed.sql
@@ -44,6 +40,13 @@ jobs:
           npx wrangler d1 execute tiku-cfw-db --remote --file=migrations/0005_add_token_usage.sql || echo "0005 已执行过（duplicate column 属正常）"
           npx wrangler d1 execute tiku-cfw-db --remote --file=migrations/0006_add_rate_limits.sql
           npx wrangler d1 execute tiku-cfw-db --remote --file=migrations/0007_channel_entry_and_trace.sql || echo "0007 已执行过（duplicate column 属正常）"
+          npx wrangler d1 execute tiku-cfw-db --remote --file=migrations/0008_indexes.sql
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Deploy
+        run: npx wrangler deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

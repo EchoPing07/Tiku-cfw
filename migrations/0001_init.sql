@@ -91,5 +91,5 @@ CREATE TABLE IF NOT EXISTS search_logs (
 CREATE INDEX IF NOT EXISTS idx_logs_created ON search_logs(created_at);
 CREATE INDEX IF NOT EXISTS idx_logs_found ON search_logs(found);
 CREATE INDEX IF NOT EXISTS idx_logs_hash ON search_logs(question_hash);
-CREATE INDEX IF NOT EXISTS idx_logs_day ON search_logs(date(created_at));
-CREATE INDEX IF NOT EXISTS idx_logs_error_type ON search_logs(error_type);
+-- 注意：idx_logs_day / idx_logs_error_type 依赖后期迁移加出的列或函数索引，
+-- 不能放在这里（旧库重跑会因列不存在而中断），统一由 0008_indexes.sql 补齐

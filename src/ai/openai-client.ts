@@ -1,7 +1,16 @@
-import type { AIRequest, AIResult, TokenUsage } from './types';
+import type { AIRequest, AIResult, AIErrorType, TokenUsage } from './types';
 import { AIError } from './types';
 
-/** 调用 OpenAI 兼容接口（/chat/completions） */
+/** HTTP 状态码 → 错误分类 */
+function httpErrorType(status: number): AIErrorType {
+  if (status === 401 || status === 403) return 'http_auth';
+  if (status === 429) return 'http_rate';
+  if (status === 400) return 'http_bad_request';
+  if (status >= 500) return 'http_server';
+  return 'http_other';
+}
+
+/** 调用 OpenAI 兼容接口（/chat/completions），抛错统一携带分类与状态码 */
 export async function callOpenAI(req: AIRequest): Promise<AIResult> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), req.timeout * 1000);
@@ -34,31 +43,34 @@ export async function callOpenAI(req: AIRequest): Promise<AIResult> {
     responseText = await response.text();
   } catch (err) {
     if (err instanceof DOMException && err.name === 'AbortError') {
-      throw new AIError('AI 请求超时', rawRequest);
+      throw new AIError('AI 请求超时', 'timeout', rawRequest, undefined, undefined, null);
     }
     if (response === undefined) {
-      // fetch 本身抛异常（DNS 失败、连接拒绝等）
+      // fetch 本身抛异常（DNS 失败、连接拒绝等）——多为 base_url 配错
       throw new AIError(
         `AI 网络请求失败: ${err instanceof Error ? err.message : String(err)}`,
-        rawRequest
+        'network', rawRequest, undefined, undefined, null
       );
     }
     // response.text() 抛异常（连接中断、响应体读取失败等）
     throw new AIError(
       `AI 响应读取失败: ${err instanceof Error ? err.message : String(err)}`,
-      rawRequest
+      'read', rawRequest, undefined, undefined, null
     );
   } finally {
     clearTimeout(timeoutId);
   }
 
-  if (!response) throw new AIError('AI 响应丢失', rawRequest); // 理论不可达，收窄类型
+  if (!response) throw new AIError('AI 响应丢失', 'network', rawRequest, undefined, undefined, null); // 理论不可达，收窄类型
 
   if (!response.ok) {
     throw new AIError(
       `AI 请求失败 ${response.status}: ${responseText.slice(0, 500)}`,
+      httpErrorType(response.status),
       rawRequest,
-      responseText
+      responseText,
+      undefined,
+      response.status
     );
   }
 
@@ -70,7 +82,11 @@ export async function callOpenAI(req: AIRequest): Promise<AIResult> {
   try {
     data = JSON.parse(responseText);
   } catch {
-    throw new AIError('AI 响应 JSON 解析失败', rawRequest, responseText);
+    // 响应不是 JSON——典型原因：base_url 路径配错返回了 HTML 页面
+    throw new AIError(
+      `AI 响应 JSON 解析失败（开头: ${responseText.slice(0, 120) || '(空)'})`,
+      'bad_json', rawRequest, responseText, undefined, response.status
+    );
   }
 
   const choice = data.choices?.[0];
@@ -85,8 +101,7 @@ export async function callOpenAI(req: AIRequest): Promise<AIResult> {
     if (!(req.allowEmptyContent && looksLikeTruncatedReasoning)) {
       throw new AIError(
         `AI 返回内容为空${finishReason ? `（finish_reason=${finishReason}）` : ''}`,
-        rawRequest,
-        responseText
+        'empty_content', rawRequest, responseText, undefined, response.status
       );
     }
   }
@@ -107,6 +122,8 @@ export async function callOpenAI(req: AIRequest): Promise<AIResult> {
     content: content.trim(),
     model: data.model || req.model,
     usage,
+    url,
+    httpStatus: response.status,
     rawRequest,
     rawResponse: responseText,
   };

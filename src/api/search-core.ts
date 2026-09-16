@@ -1,7 +1,7 @@
 import type { Env } from '../types/env';
 import { normalizeAndHash } from '../cache/normalize';
 import { dispatchAI } from '../ai/dispatcher';
-import { AIError, type TokenUsage } from '../ai/types';
+import { AIError, type TokenUsage, type AIErrorType, type AttemptRecord, type QuestionType } from '../ai/types';
 import { uuid } from '../utils/id';
 
 /** 搜题输入 */
@@ -24,8 +24,13 @@ export interface SearchCoreResult {
   durationMs: number;
   usage: TokenUsage | null;
   error: string | null;
+  /** 错误分类（AI 调用失败时；bad_input=入站请求本身无效） */
+  errorType: AIErrorType | null;
+  httpStatus: number | null;
   rawRequest: string | null;
   rawResponse: string | null;
+  /** 调度尝试链（AI 生成时） */
+  attempts: AttemptRecord[] | null;
   /** 输入本身无效（如归一化后为空），调用方应对外返回 400 而非"未找到" */
   invalidInput?: boolean;
 }
@@ -100,16 +105,20 @@ interface LogRow {
   durationMs: number;
   apiKeyId?: string | null;
   error?: string | null;
+  errorType?: AIErrorType | null;
+  httpStatus?: number | null;
   rawRequest?: string | null;
   rawResponse?: string | null;
   usage?: TokenUsage | null;
+  attempts?: AttemptRecord[] | null;
 }
 
 /**
- * 写搜索日志：按迁移状态逐级降级构造语句（全字段 0003+0005 → 无 token 列 0003 → 基础列 0001）。
+ * 写搜索日志：按迁移状态逐级降级构造语句。
+ * trace(0007，含 http_status/error_type/attempts) → full(0003+0005) → debug(0003) → base(0001)。
  * 列级别按 isolate 探测一次并缓存，避免每次写入都先经历失败查询。
  */
-type LogsSchema = 'full' | 'debug' | 'base';
+type LogsSchema = 'trace' | 'full' | 'debug' | 'base';
 let logsSchema: LogsSchema | null = null;
 
 const isNoSuchColumn = (err: unknown): boolean => err instanceof Error && /no such column/i.test(err.message);
@@ -117,22 +126,28 @@ const isNoSuchColumn = (err: unknown): boolean => err instanceof Error && /no su
 async function detectLogsSchema(env: Env): Promise<LogsSchema> {
   if (logsSchema) return logsSchema;
   try {
-    await env.DB.prepare(
-      'SELECT ai_request, ai_response, prompt_tokens, completion_tokens, total_tokens FROM search_logs LIMIT 1'
-    ).first();
-    logsSchema = 'full';
+    await env.DB.prepare('SELECT ai_request, ai_response FROM search_logs LIMIT 1').first();
   } catch (err) {
     if (!isNoSuchColumn(err)) throw err;
-    try {
-      await env.DB.prepare('SELECT ai_request, ai_response FROM search_logs LIMIT 1').first();
-      logsSchema = 'debug';
-    } catch (err2) {
-      if (!isNoSuchColumn(err2)) throw err2;
-      logsSchema = 'base';
-    }
+    return (logsSchema = 'base');
   }
-  return logsSchema;
+  try {
+    await env.DB.prepare('SELECT prompt_tokens, completion_tokens, total_tokens FROM search_logs LIMIT 1').first();
+  } catch (err) {
+    if (!isNoSuchColumn(err)) throw err;
+    return (logsSchema = 'debug');
+  }
+  try {
+    await env.DB.prepare('SELECT error_type, http_status, attempts FROM search_logs LIMIT 1').first();
+  } catch (err) {
+    if (!isNoSuchColumn(err)) throw err;
+    return (logsSchema = 'full');
+  }
+  return (logsSchema = 'trace');
 }
+
+/** attempts 列上限（与 debug-envelope 的 ATTEMPTS_LIMIT 一致） */
+const LOG_ATTEMPTS_LIMIT = 4096;
 
 /** 构造日志 INSERT 语句（并入 batch 一次往返写入）；schema 探测失败时返回 null（放弃本条日志） */
 async function buildLogStmt(env: Env, r: LogRow): Promise<D1PreparedStatement | null> {
@@ -148,6 +163,17 @@ async function buildLogStmt(env: Env, r: LogRow): Promise<D1PreparedStatement | 
     r.answer ?? null, r.channel ?? null, r.model ?? null,
     r.durationMs, r.apiKeyId ?? null, r.error ?? null,
   ];
+  if (schema === 'trace') {
+    const attemptsJson = r.attempts ? truncate(JSON.stringify(r.attempts), LOG_ATTEMPTS_LIMIT) : null;
+    return env.DB.prepare(
+      `INSERT INTO search_logs (id, question, question_hash, found, from_cache, answer, ai_channel, ai_model, duration_ms, api_key_id, error, ai_request, ai_response, prompt_tokens, completion_tokens, total_tokens, http_status, error_type, attempts)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      id, ...base, truncate(r.rawRequest, 8192), truncate(r.rawResponse, 16384),
+      r.usage?.promptTokens ?? 0, r.usage?.completionTokens ?? 0, r.usage?.totalTokens ?? 0,
+      r.httpStatus ?? null, r.errorType ?? null, attemptsJson
+    );
+  }
   if (schema === 'full') {
     return env.DB.prepare(
       `INSERT INTO search_logs (id, question, question_hash, found, from_cache, answer, ai_channel, ai_model, duration_ms, api_key_id, error, ai_request, ai_response, prompt_tokens, completion_tokens, total_tokens)
@@ -180,6 +206,19 @@ async function safeBatch(env: Env, stmts: Array<D1PreparedStatement | null>): Pr
   }
 }
 
+/** 写入“入站请求无效”日志（bad_input：body 非 JSON / 校验失败），question 存截断摘要 */
+export async function logBadInput(env: Env, rawBody: string, hash: string, msg: string): Promise<void> {
+  await safeBatch(env, [
+    await buildLogStmt(env, {
+      question: truncate(rawBody, 200) || '(空)',
+      hash,
+      found: false, fromCache: false,
+      durationMs: 0, apiKeyId: null,
+      error: msg, errorType: 'bad_input',
+    }),
+  ]);
+}
+
 /**
  * 搜题核心流程：归一化 → 查缓存 → 未命中调 AI → 写缓存/日志。
  * apiKeyId 为 null 时（管理面板在线搜题）不更新题库密钥使用统计。
@@ -198,12 +237,13 @@ export async function performSearch(env: Env, input: SearchInput, apiKeyId: stri
     const durationMs = Date.now() - startTime;
     const msg = '题目内容无效（去除格式标记后为空）';
     await safeBatch(env, [
-      await buildLogStmt(env, { question: title, hash, found: false, fromCache: false, durationMs, apiKeyId, error: msg }),
+      await buildLogStmt(env, { question: title, hash, found: false, fromCache: false, durationMs, apiKeyId, error: msg, errorType: 'bad_input' }),
     ]);
     return {
       found: false, fromCache: false, question: title, answer: null,
       channel: null, model: null, durationMs, usage: null, error: msg,
-      rawRequest: null, rawResponse: null, invalidInput: true,
+      errorType: 'bad_input', httpStatus: null, rawRequest: null, rawResponse: null, attempts: null,
+      invalidInput: true,
     };
   }
 
@@ -234,7 +274,7 @@ export async function performSearch(env: Env, input: SearchInput, apiKeyId: stri
     return {
       found: true, fromCache: true, question: cached.question, answer: cached.answer,
       channel: null, model: null, durationMs, usage: null, error: null,
-      rawRequest: null, rawResponse: null,
+      errorType: null, httpStatus: null, rawRequest: null, rawResponse: null, attempts: null,
     };
   }
 
@@ -242,7 +282,7 @@ export async function performSearch(env: Env, input: SearchInput, apiKeyId: stri
   try {
     const aiResult = await dispatchAI({
       title,
-      type: input.type as any,
+      type: input.type as QuestionType,
       options: input.options,
       images,
       env,
@@ -269,8 +309,11 @@ export async function performSearch(env: Env, input: SearchInput, apiKeyId: stri
       await buildLogStmt(env, {
         question: title, hash, found: true, fromCache: false,
         answer: aiResult.content, channel: aiResult.channelName, model: aiResult.model,
-        durationMs, apiKeyId, rawRequest: aiResult.rawRequest, rawResponse: aiResult.rawResponse,
+        durationMs, apiKeyId,
+        rawRequest: aiResult.rawRequest, rawResponse: aiResult.rawResponse,
         usage: aiResult.usage,
+        httpStatus: aiResult.httpStatus, errorType: null,
+        attempts: aiResult.attempts,
       }),
     ]);
 
@@ -278,16 +321,20 @@ export async function performSearch(env: Env, input: SearchInput, apiKeyId: stri
       found: true, fromCache: false, question: title, answer: aiResult.content,
       channel: aiResult.channelName, model: aiResult.model,
       durationMs, usage: aiResult.usage, error: null,
+      errorType: null, httpStatus: aiResult.httpStatus,
       rawRequest: aiResult.rawRequest, rawResponse: aiResult.rawResponse,
+      attempts: aiResult.attempts,
     };
   } catch (err) {
     const durationMs = Date.now() - startTime;
     const errMsg = err instanceof Error ? err.message : String(err);
-    // AI 调度错误携带原始请求/响应与首个失败模型，便于日志排查与模型归因
+    // AI 调度错误携带错误分类、原始请求/响应与首个失败模型，便于日志排查与模型归因
     const rawRequest = err instanceof AIError ? (err.rawRequest || null) : null;
     const rawResponse = err instanceof AIError ? (err.rawResponse || null) : null;
     const failChannel = err instanceof AIError ? (err.channel || null) : null;
-
+    const errorType = err instanceof AIError ? err.errorType : null;
+    const httpStatus = err instanceof AIError ? err.httpStatus : null;
+    const failedAttempts = err instanceof AIError ? (err.attempts || null) : null;
     await safeBatch(env, [
       apiKeyId
         ? env.DB.prepare(
@@ -298,7 +345,9 @@ export async function performSearch(env: Env, input: SearchInput, apiKeyId: stri
         question: title, hash, found: false, fromCache: false,
         channel: failChannel,
         durationMs, apiKeyId, error: errMsg,
+        errorType, httpStatus,
         rawRequest, rawResponse,
+        attempts: failedAttempts,
       }),
     ]);
 
@@ -306,7 +355,8 @@ export async function performSearch(env: Env, input: SearchInput, apiKeyId: stri
       found: false, fromCache: false, question: title, answer: null,
       channel: failChannel, model: null,
       durationMs, usage: null, error: errMsg,
-      rawRequest, rawResponse,
+      errorType, httpStatus,
+      rawRequest, rawResponse, attempts: failedAttempts,
     };
   }
 }

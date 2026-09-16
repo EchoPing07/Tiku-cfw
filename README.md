@@ -12,7 +12,7 @@ Tiku-cfw 是一个部署在 Cloudflare Workers 上的 AI 题库服务。它接�
 ### 核心特性
 
 - 🔍 **OCS 兼容** — 搜题接口完全兼容 OCS `AnswererWrapper` 规范，配置即用
-- 🤖 **多模型调度** — 支持文本/视觉两类模型，多模型权重调度，最少使用优先轮询，失败自动禁用降级，支持一键测试连通（成功自动恢复 API Key）
+- 🤖 **多模型调度** — 文本/视觉两类模型独立配置，模型条目化（一个条目 = 端点 + 模型 + 单 Key + 权重），加权随机分流 + 失败自动熔断冷却（到期自动恢复，无需人工重置），支持一键测试连通（成功自动恢复）
 - 💾 **智能缓存** — 题目归一化后精确匹配，命中缓存秒回，永不过期
 - 🖼️ **图片支持** — 带图题目自动路由到视觉模型
 - 📊 **Web 管理面板** — 仪表盘（题库查询 + Token 用量双分区、14 天趋势图）、题库管理、在线搜题、题库密钥管理、模型列表配置、搜索日志（含 Token 用量与答案纠错）
@@ -149,9 +149,10 @@ npm run typecheck           # 类型检查
 ### 1. 配置模型
 
 在管理面板「模型列表」页面：
-1. 添加模型（填写 API 地址、模型 ID、类型 text/vision、权重）
-2. 在模型下添加 API Key（支持多 Key 轮询）
-3. 启用模型
+1. 添加模型条目（填写 API 地址、模型 ID、类型 text/vision、权重、API Key）
+   - 权重越高被选中概率越大（按比例分流）；失败达阈值自动熔断，冷却后自动恢复
+   - 同一模型想配多个 Key：复制条目、换 Key、设相同权重（均匀分摊流量）
+2. 启用模型条目
 
 ### 2. 创建题库密钥
 
@@ -195,15 +196,14 @@ Content-Type: application/json
 | PUT/DELETE | `/api/admin/keys/:id` | 编辑/删除 |
 | GET | `/api/admin/keys/:id/ocs-config` | 获取 OCS 配置（管理面板复制用） |
 | GET | `/api/share/ocs/:token` | 免登录查看 OCS 配置（分享开关开启后有效） |
-| GET/POST | `/api/admin/channels` | 模型管理 |
-| PUT/DELETE | `/api/admin/channels/:id` | 编辑/删除模型 |
-| POST | `/api/admin/channels/:id/test` | 测试模型连通性（逐 API Key，成功自动恢复） |
-| GET/POST | `/api/admin/channels/:id/keys` | 模型 API Key 管理 |
-| PUT/DELETE | `/api/admin/channel-keys/:id` | 编辑/删除 API Key |
-| POST | `/api/admin/channel-keys/:id/reset` | 重置失败计数 |
+| GET/POST | `/api/admin/channels` | 模型管理（创建需含 api_key） |
+| PUT/DELETE | `/api/admin/channels/:id` | 编辑/删除模型条目 |
+| POST | `/api/admin/channels/:id/test` | 测试模型连通性（成功自动恢复） |
+| POST | `/api/admin/channels/:id/recover` | 立即解除熔断冷却 |
 | POST | `/api/admin/debug/search` | 在线搜题（管理面板，走完整生产链路） |
 | GET/PUT | `/api/admin/settings` | 系统设置 |
-| GET/DELETE | `/api/admin/logs` | 搜索日志 |
+| GET/DELETE | `/api/admin/logs` | 搜索日志列表/清空 |
+| GET | `/api/admin/logs/:id` | 单条日志详情（含 AI 请求/响应信封与尝试链） |
 | GET | `/api/health` | 健康检查 |
 
 完整接口规范参考 [OCS-API-参考文档.md](../OCS-API-参考文档.md)。

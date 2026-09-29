@@ -245,3 +245,58 @@ describe('performSearch（缓存键含选项）', () => {
     expect(dispatchAI).not.toHaveBeenCalled();
   });
 });
+
+// ======================================================================
+// performSearch：入库门槛——空答案/拒答不入库（否则拒答文本永久污染缓存）
+// ======================================================================
+describe('performSearch（入库门槛）', () => {
+  it('拒答文本不入库：返回未找到，无 questions INSERT', async () => {
+    const { env, executed } = makeEnv({});
+    vi.mocked(dispatchAI).mockResolvedValue({ ...aiResult, content: '题目不完整，无法作答' });
+
+    const r = await performSearch(env, { title: TITLE }, null);
+
+    expect(r.found).toBe(false);
+    expect(r.fromCache).toBe(false);
+    expect(r.answer).toBeNull();
+    expect(r.errorType).toBe('refusal');
+    expect(r.error).toContain('未入库');
+    expect(insertStmts(executed)).toHaveLength(0); // 拒答绝不写入题库
+  });
+
+  it('空答案不入库', async () => {
+    const { env, executed } = makeEnv({});
+    vi.mocked(dispatchAI).mockResolvedValue({ ...aiResult, content: '   ' });
+
+    const r = await performSearch(env, { title: TITLE }, null);
+
+    expect(r.found).toBe(false);
+    expect(r.answer).toBeNull();
+    expect(r.errorType).toBe('refusal');
+    expect(insertStmts(executed)).toHaveLength(0);
+  });
+
+  it('短拒答措辞（如「无法确定」）不入库', async () => {
+    const { env, executed } = makeEnv({});
+    vi.mocked(dispatchAI).mockResolvedValue({ ...aiResult, content: '无法确定' });
+
+    const r = await performSearch(env, { title: TITLE }, null);
+
+    expect(r.found).toBe(false);
+    expect(insertStmts(executed)).toHaveLength(0);
+  });
+
+  it('正常答案不受门槛影响（回归）', async () => {
+    const { hash } = await normalizeAndHash(TITLE, OPTS);
+    const { env, executed } = makeEnv({});
+    vi.mocked(dispatchAI).mockResolvedValue(aiResult);
+
+    const r = await performSearch(env, { title: TITLE, options: OPTS }, null);
+
+    expect(r.found).toBe(true);
+    expect(r.answer).toBe('AI 新答案');
+    const inserts = insertStmts(executed);
+    expect(inserts).toHaveLength(1);
+    expect(inserts[0].params[3]).toBe(hash);
+  });
+});

@@ -17,7 +17,10 @@ export async function callOpenAI(req: AIRequest): Promise<AIResult> {
 
   const url = req.baseUrl.replace(/\/$/, '') + '/chat/completions';
 
+  // 附加参数在前、核心字段在后：即使配置里出现同名键（校验已拦截，此处双保险），
+  // model/messages/temperature/max_tokens 也始终以条目字段为准，不可能被附加参数劫持
   const body: Record<string, unknown> = {
+    ...(req.extraParams ?? {}),
     model: req.model,
     messages: req.messages,
     temperature: req.temperature,

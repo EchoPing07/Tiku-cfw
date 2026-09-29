@@ -54,6 +54,13 @@ async function updateSettings(request: Request, env: Env): Promise<Response> {
     if (!Number.isFinite(n) || n < 0 || n > 1_000_000) return error('search_rate_limit 无效（0~1000000，0=不限流）');
     body.search_rate_limit = String(Math.floor(n));
   }
+  if (body.vision_timeout !== undefined) {
+    const n = typeof body.vision_timeout === 'number'
+      ? body.vision_timeout
+      : parseInt(String(body.vision_timeout), 10);
+    if (!Number.isFinite(n) || n < 5 || n > 600) return error('vision_timeout 无效（5~600 秒）');
+    body.vision_timeout = String(Math.floor(n));
+  }
 
   for (const [key, value] of Object.entries(body)) {
     await env.DB.prepare(

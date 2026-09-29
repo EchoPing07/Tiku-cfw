@@ -6,7 +6,8 @@
 INSERT OR IGNORE INTO settings (key, value, description) VALUES
     ('site_name',           'Tiku-cfw',  '站点名称'),
     ('log_retention_days',  '30',        '日志保留天数（0=永久）'),
-    ('ai_timeout',          '30',        'AI 请求超时秒数'),
+    ('ai_timeout',          '30',        'AI 请求超时秒数（文本模型；视觉模型用 vision_timeout）'),
+    ('vision_timeout',      '60',        '视觉模型单次请求超时秒数（默认 60；文本模型用 ai_timeout）'),
     ('key_fail_threshold',  '3',         '模型连续失败熔断阈值（达到后进入冷却）'),
     ('channel_cooldown_minutes', '10',    '模型熔断后的冷却分钟数（0=仅计数不冷却）'),
     ('cors_origins',        '*',         'CORS 允许的域名'),
@@ -19,6 +20,6 @@ INSERT OR IGNORE INTO settings (key, value, description) VALUES
 -- 需要时请在面板手动重建。
 INSERT OR IGNORE INTO ai_channels (id, name, type, base_url, model, weight, temperature, max_tokens, enabled)
 SELECT column1, column2, column3, column4, column5, column6, column7, column8, column9 FROM (VALUES
-    ('default-text',   'OpenAI 文本', 'text',   'https://api.openai.com/v1', 'gpt-4o-mini', 1, 0.3, 2000, 0),
-    ('default-vision', 'OpenAI 视觉', 'vision', 'https://api.openai.com/v1', 'gpt-4o',      1, 0.3, 2000, 0)
+    ('default-text',   'OpenAI 文本', 'text',   'https://api.openai.com/v1', 'gpt-4o-mini', 1, 0.7, 4096, 0),
+    ('default-vision', 'OpenAI 视觉', 'vision', 'https://api.openai.com/v1', 'gpt-4o',      1, 0.7, 4096, 0)
 ) WHERE NOT EXISTS (SELECT 1 FROM ai_channels);

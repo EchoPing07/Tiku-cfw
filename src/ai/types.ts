@@ -26,6 +26,7 @@ export interface ChatMessage {
  * - http_other         其余非 2xx
  * - bad_json           响应不是合法 JSON——多为 base_url 路径配错返回了 HTML 页面
  * - empty_content      content 为空（推理模型思考占满 max_tokens 等）
+ * - refusal            AI 正常返回但答案是拒答/空（入库门槛拦截，不缓存）
  * - no_channel         该类型下没有可用模型条目
  * - no_key             条目未配置 API Key
  * - budget             调度总预算耗尽
@@ -42,6 +43,7 @@ export type AIErrorType =
   | 'http_other'
   | 'bad_json'
   | 'empty_content'
+  | 'refusal'
   | 'no_channel'
   | 'no_key'
   | 'budget'
@@ -56,6 +58,8 @@ export interface AIRequest {
   temperature: number;
   maxTokens: number;
   timeout: number;
+  /** 条目级附加请求参数（合并进请求体；核心字段 model/messages/temperature/max_tokens 优先） */
+  extraParams?: Record<string, unknown>;
   /** 连通性测试模式：content 为空但响应合法（length 截断 / 仅有思考内容）时不视为错误 */
   allowEmptyContent?: boolean;
 }
@@ -94,6 +98,8 @@ export interface AIChannelRow {
   weight: number;
   temperature: number;
   max_tokens: number;
+  /** 条目级附加请求参数（JSON 对象字符串，如 {"enable_thinking": false}；NULL/空 = 不附加） */
+  extra_params: string | null;
   enabled: number;
   use_count: number;
   fail_count: number;

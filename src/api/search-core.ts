@@ -1,6 +1,7 @@
 import type { Env } from '../types/env';
 import { normalizeAndHash, normalizeOptions, questionHash } from '../cache/normalize';
 import { dispatchAI } from '../ai/dispatcher';
+import { isRefusalAnswer } from '../ai/answer-parser';
 import { AIError, type TokenUsage, type AIErrorType, type AttemptRecord, type QuestionType } from '../ai/types';
 import { uuid } from '../utils/id';
 
@@ -347,6 +348,36 @@ export async function performSearch(env: Env, input: SearchInput, apiKeyId: stri
     });
 
     const durationMs = Date.now() - startTime;
+
+    // 入库门槛：空答案/拒答不入缓存。拒答文本一旦入库会永久污染缓存——
+    // 该题此后永远直接命中拒答“答案”，不再走 AI。日志仍记录原始回答与尝试链供排查
+    if (isRefusalAnswer(aiResult.content)) {
+      const refusalMsg = 'AI 未给出有效答案（拒答/空答案），未入库';
+      await safeBatch(env, [
+        apiKeyId
+          ? env.DB.prepare(
+              "UPDATE api_keys SET use_count = use_count + 1, last_used = datetime('now') WHERE id = ?"
+            ).bind(apiKeyId)
+          : null,
+        await buildLogStmt(env, {
+          question: title, hash, found: false, fromCache: false,
+          answer: aiResult.content, channel: aiResult.channelName, model: aiResult.model,
+          durationMs, apiKeyId, error: refusalMsg, errorType: 'refusal',
+          rawRequest: aiResult.rawRequest, rawResponse: aiResult.rawResponse,
+          usage: aiResult.usage,
+          httpStatus: aiResult.httpStatus,
+          attempts: aiResult.attempts,
+        }),
+      ]);
+
+      return {
+        found: false, fromCache: false, question: title, answer: null,
+        channel: aiResult.channelName, model: aiResult.model,
+        durationMs, usage: aiResult.usage, error: refusalMsg,
+        errorType: 'refusal', httpStatus: aiResult.httpStatus,
+        rawRequest: aiResult.rawRequest, rawResponse: aiResult.rawResponse, attempts: aiResult.attempts,
+      };
+    }
 
     // 缓存写入 / 密钥用量 / 日志合并为一次 batch；写失败仅记日志，答案照常返回
     await safeBatch(env, [

@@ -18,6 +18,8 @@
     "db:migrate:rate:local": "wrangler d1 execute tiku-cfw-db --local --file=migrations/0006_add_rate_limits.sql",
     "db:migrate:entry": "wrangler d1 execute tiku-cfw-db --file=migrations/0007_channel_entry_and_trace.sql",
     "db:migrate:entry:local": "wrangler d1 execute tiku-cfw-db --local --file=migrations/0007_channel_entry_and_trace.sql",
+    "db:migrate:params": "wrangler d1 execute tiku-cfw-db --file=migrations/0009_param_defaults.sql",
+    "db:migrate:params:local": "wrangler d1 execute tiku-cfw-db --local --file=migrations/0009_param_defaults.sql",
     "db:seed": "wrangler d1 execute tiku-cfw-db --file=migrations/0002_seed.sql",
     "db:seed:local": "wrangler d1 execute tiku-cfw-db --local --file=migrations/0002_seed.sql",
     "typecheck": "tsc --noEmit",

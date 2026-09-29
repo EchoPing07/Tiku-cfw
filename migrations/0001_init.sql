@@ -45,8 +45,9 @@ CREATE TABLE IF NOT EXISTS ai_channels (
     model         TEXT NOT NULL,
     api_key       TEXT,                        -- 条目自带单 Key
     weight        INTEGER DEFAULT 1,           -- 加权随机的权重（越高被选中概率越大）
-    temperature   REAL DEFAULT 0.3,
-    max_tokens    INTEGER DEFAULT 2000,
+    temperature   REAL DEFAULT 0.7,
+    max_tokens    INTEGER DEFAULT 4096,
+    extra_params  TEXT,                        -- 条目级附加请求参数（JSON 对象字符串，如 {"enable_thinking": false}）
     enabled       INTEGER DEFAULT 1,
     use_count     INTEGER DEFAULT 0,
     fail_count    INTEGER DEFAULT 0,

@@ -5,6 +5,7 @@ import { requireAuth } from '../auth/middleware';
 import { uuid } from '../utils/id';
 import { parseJsonBody } from '../utils/request';
 import { callOpenAI } from '../ai/openai-client';
+import { parseExtraParams, validateExtraParams } from '../ai/extra-params';
 
 /** 模型管理路由（模型条目化：一个条目 = 端点 + 模型 + 单个 API Key + 权重） */
 export async function channelsHandler(request: Request, env: Env, path: string): Promise<Response> {
@@ -72,6 +73,8 @@ interface ChannelBody {
   weight?: number;
   temperature?: number;
   max_tokens?: number;
+  /** 条目级附加请求参数：JSON 字符串（表单）或对象（API）；空 = 清除 */
+  extra_params?: string | Record<string, unknown> | null;
   enabled?: number;
 }
 
@@ -100,14 +103,16 @@ async function createChannel(request: Request, env: Env): Promise<Response> {
   if (invalid) return error(invalid);
 
   const weight = body.weight ?? 1;
-  const temperature = body.temperature ?? 0.3;
-  const maxTokens = body.max_tokens ?? 2000;
+  const temperature = body.temperature ?? 0.7;
+  const maxTokens = body.max_tokens ?? 4096;
+  const extra = validateExtraParams(body.extra_params);
+  if (!extra.ok) return error(extra.msg || '附加参数无效');
 
   const id = uuid();
   await env.DB.prepare(
-    `INSERT INTO ai_channels (id, name, type, base_url, model, api_key, weight, temperature, max_tokens, enabled)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`
-  ).bind(id, body.name, body.type, body.base_url, body.model, body.api_key.trim(), weight, temperature, maxTokens).run();
+    `INSERT INTO ai_channels (id, name, type, base_url, model, api_key, weight, temperature, max_tokens, extra_params, enabled)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`
+  ).bind(id, body.name, body.type, body.base_url, body.model, body.api_key.trim(), weight, temperature, maxTokens, extra.value).run();
 
   return json({ id, msg: '创建成功' });
 }
@@ -134,6 +139,11 @@ async function updateChannel(request: Request, env: Env, id: string): Promise<Re
   if (body.weight !== undefined) { sets.push('weight = ?'); params.push(body.weight); }
   if (body.temperature !== undefined) { sets.push('temperature = ?'); params.push(body.temperature); }
   if (body.max_tokens !== undefined) { sets.push('max_tokens = ?'); params.push(body.max_tokens); }
+  if (body.extra_params !== undefined) {
+    const extra = validateExtraParams(body.extra_params);
+    if (!extra.ok) return error(extra.msg || '附加参数无效');
+    sets.push('extra_params = ?'); params.push(extra.value);
+  }
   if (body.enabled !== undefined) { sets.push('enabled = ?'); params.push(body.enabled); }
   params.push(id);
 
@@ -192,6 +202,8 @@ async function testChannelConnection(env: Env, id: string): Promise<Response> {
       temperature: 0,
       maxTokens: 1024,
       timeout: 15,
+      // 连通性测试也带附加参数：验证厂商是否接受（否则测试通过、真搜题却 400）
+      extraParams: parseExtraParams(channel.extra_params as string | null),
       allowEmptyContent: true,
     });
     ok = true;

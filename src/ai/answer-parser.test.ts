@@ -1,5 +1,41 @@
 import { describe, it, expect } from 'vitest';
-import { parseAIAnswer } from './answer-parser';
+import { parseAIAnswer, isRefusalAnswer } from './answer-parser';
+
+describe('isRefusalAnswer（入库门槛）', () => {
+  it('空/纯空白答案判为拒答', () => {
+    expect(isRefusalAnswer('')).toBe(true);
+    expect(isRefusalAnswer('   ')).toBe(true);
+  });
+
+  it('标准化拒答短语（prompt 规则 9）被拦截', () => {
+    expect(isRefusalAnswer('题目不完整，无法作答')).toBe(true);
+    expect(isRefusalAnswer('题目不完整')).toBe(true);
+  });
+
+  it('短答案中的典型拒答措辞被拦截', () => {
+    expect(isRefusalAnswer('无法确定')).toBe(true);
+    expect(isRefusalAnswer('无法回答该问题')).toBe(true);
+    expect(isRefusalAnswer('信息不足，无法判断')).toBe(true);
+    expect(isRefusalAnswer('无法识别图片中的内容')).toBe(true);
+    expect(isRefusalAnswer('看不懂题目')).toBe(true);
+    expect(isRefusalAnswer('无法从题目中获得有效信息')).toBe(true);
+    expect(isRefusalAnswer('根据提供的图片无法作答')).toBe(true);
+  });
+
+  it('正常答案不被误拦', () => {
+    expect(isRefusalAnswer('A')).toBe(false);
+    expect(isRefusalAnswer('正确')).toBe(false);
+    expect(isRefusalAnswer('A#B#C')).toBe(false);
+    expect(isRefusalAnswer('北京')).toBe(false);
+    expect(isRefusalAnswer('传动角')).toBe(false);
+  });
+
+  it('长答案（>40 字符）中的拒答措辞不误拦——多为正常作答内容', () => {
+    expect(isRefusalAnswer(
+      '根据题干描述，该机构的自由度计算过程为：去除公共约束后对活动构件数与低副数作差，无法确定具体数值时需结合实际结构补充条件，最终结果为 42'
+    )).toBe(false);
+  });
+});
 
 describe('parseAIAnswer', () => {
   it('提取 markdown 代码块中的内容', () => {

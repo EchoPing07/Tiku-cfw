@@ -1,5 +1,5 @@
 import type { Env } from '../types/env';
-import { normalizeAndHash } from '../cache/normalize';
+import { normalizeAndHash, normalizeOptions, questionHash } from '../cache/normalize';
 import { dispatchAI } from '../ai/dispatcher';
 import { AIError, type TokenUsage, type AIErrorType, type AttemptRecord, type QuestionType } from '../ai/types';
 import { uuid } from '../utils/id';
@@ -229,7 +229,7 @@ export async function performSearch(env: Env, input: SearchInput, apiKeyId: stri
   const hasImages = images.length > 0;
   const startTime = Date.now();
 
-  const { normalized, hash } = await normalizeAndHash(title);
+  const { normalized, hash, optionsNorm } = await normalizeAndHash(title, input.options);
 
   // 归一化后为空（题目只含标点/格式标记等）：不查缓存也不调 AI，
   // 避免所有"空"题目命中同一条 SHA-256("") 缓存互相串答案
@@ -247,7 +247,7 @@ export async function performSearch(env: Env, input: SearchInput, apiKeyId: stri
     };
   }
 
-  // 查缓存（精确匹配）
+  // 查缓存（精确匹配：键 = 题干归一化 + 选项归一化；无选项时退化为旧版题干键，与存量缓存直接兼容）
   const cached = await env.DB.prepare(
     'SELECT id, question, answer FROM questions WHERE question_hash = ?'
   ).bind(hash).first<{ id: string; question: string; answer: string }>();
@@ -273,6 +273,64 @@ export async function performSearch(env: Env, input: SearchInput, apiKeyId: stri
 
     return {
       found: true, fromCache: true, question: cached.question, answer: cached.answer,
+      channel: null, model: null, durationMs, usage: null, error: null,
+      errorType: null, httpStatus: null, rawRequest: null, rawResponse: null, attempts: null,
+    };
+  }
+
+  // 兼容回退：本修复之前的存量条目哈希仅含题干。带选项的请求在新键未命中时查旧键（题干哈希），
+  // 命中后必须校验选项归一化一致才采用——防止“题干相同、选项不同”的两道题串答案；
+  // 不一致则视为未命中，走 AI 重新作答（新答案以新键入库，与旧条目隔离）。
+  let legacy: {
+    row: { id: string; question: string; answer: string; type: string | null; options: string | null; source: string | null; ai_model: string | null };
+    optionsMatch: boolean;
+  } | null = null;
+
+  if (optionsNorm) {
+    const titleOnlyHash = await questionHash(normalized);
+    const row = await env.DB.prepare(
+      'SELECT id, question, answer, type, options, source, ai_model FROM questions WHERE question_hash = ?'
+    ).bind(titleOnlyHash).first<{
+      id: string; question: string; answer: string; type: string | null;
+      options: string | null; source: string | null; ai_model: string | null;
+    }>();
+    if (row) {
+      legacy = { row, optionsMatch: row.options ? normalizeOptions(row.options) === optionsNorm : false };
+    }
+  }
+
+  if (legacy && legacy.optionsMatch) {
+    const row = legacy.row;
+    const durationMs = Date.now() - startTime;
+
+    // 命中计数 / 密钥用量 / 日志合并为一次 batch；同时以新键（题干+选项）回写一条变体，
+    // 下次同题干同选项直接命中新键，免去每次的旧键回退查询（ON CONFLICT 保证幂等）
+    await safeBatch(env, [
+      env.DB.prepare(
+        "UPDATE questions SET hit_count = hit_count + 1, updated_at = datetime('now') WHERE id = ?"
+      ).bind(row.id),
+      env.DB.prepare(
+        `INSERT INTO questions (id, question, question_norm, question_hash, answer, type, options, source, ai_model, has_images, hit_count)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+         ON CONFLICT(question_hash) DO NOTHING`
+      ).bind(
+        uuid(), title, normalized, hash, row.answer,
+        input.type || row.type, input.options || row.options,
+        row.source || 'ai', row.ai_model, hasImages ? 1 : 0
+      ),
+      apiKeyId
+        ? env.DB.prepare(
+            "UPDATE api_keys SET use_count = use_count + 1, last_used = datetime('now') WHERE id = ?"
+          ).bind(apiKeyId)
+        : null,
+      await buildLogStmt(env, {
+        question: title, hash, found: true, fromCache: true,
+        answer: row.answer, durationMs, apiKeyId,
+      }),
+    ]);
+
+    return {
+      found: true, fromCache: true, question: row.question, answer: row.answer,
       channel: null, model: null, durationMs, usage: null, error: null,
       errorType: null, httpStatus: null, rawRequest: null, rawResponse: null, attempts: null,
     };

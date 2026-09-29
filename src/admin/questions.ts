@@ -128,7 +128,7 @@ async function createQuestion(request: Request, env: Env): Promise<Response> {
   if (body.type !== undefined && body.type !== null && typeof body.type !== 'string') return error('题型(type)必须为字符串');
   if (body.options !== undefined && body.options !== null && typeof body.options !== 'string') return error('选项(options)必须为字符串');
 
-  const { normalized, hash } = await normalizeAndHash(body.question);
+  const { normalized, hash } = await normalizeAndHash(body.question, body.options || undefined);
   if (!normalized) return error('题目内容无效（去除格式标记后为空）');
 
   // 前置检查：给出友好提示
@@ -174,16 +174,23 @@ async function updateQuestion(request: Request, env: Env, id: string): Promise<R
   const sets: string[] = ["updated_at = datetime('now')"];
   const params: unknown[] = [];
 
-  if (body.question !== undefined) {
-    const { normalized, hash } = await normalizeAndHash(body.question);
+  // 缓存键 = 题干 + 选项 的归一化哈希：题干或选项任一变化都需重算并查重
+  if (body.question !== undefined || body.options !== undefined) {
+    const finalQuestion = body.question !== undefined ? body.question : (existing.question as string);
+    const finalOptions = body.options !== undefined ? body.options : (existing.options as string | null);
+    const { normalized, hash } = await normalizeAndHash(finalQuestion, finalOptions || undefined);
     if (!normalized) return error('题目内容无效（去除格式标记后为空）');
     // 撞库检查（排除自身）
     const conflict = await env.DB.prepare(
       'SELECT id FROM questions WHERE question_hash = ? AND id <> ?'
     ).bind(hash, id).first();
-    if (conflict) return error('与其他题目冲突（归一化后哈希重复）');
-    sets.push('question = ?', 'question_norm = ?', 'question_hash = ?');
-    params.push(body.question, normalized, hash);
+    if (conflict) return error('与其他题目冲突（题干+选项归一化后哈希重复）');
+    if (body.question !== undefined) {
+      sets.push('question = ?', 'question_norm = ?');
+      params.push(body.question, normalized);
+    }
+    sets.push('question_hash = ?');
+    params.push(hash);
   }
   if (body.answer !== undefined) { sets.push('answer = ?'); params.push(body.answer); }
   if (body.type !== undefined) { sets.push('type = ?'); params.push(body.type); }
@@ -195,7 +202,7 @@ async function updateQuestion(request: Request, env: Env, id: string): Promise<R
   } catch (err) {
     // 检查与更新之间的并发竞态撞 UNIQUE 时转成友好错误，而非 500
     if (err instanceof Error && /UNIQUE constraint failed/i.test(err.message)) {
-      return error('与其他题目冲突（归一化后哈希重复）');
+      return error('与其他题目冲突（题干+选项归一化后哈希重复）');
     }
     throw err;
   }
@@ -251,7 +258,7 @@ async function importQuestions(request: Request, env: Env): Promise<Response> {
     if (item.type !== undefined && item.type !== null && typeof item.type !== 'string') { skipped++; continue; }
     if (item.options !== undefined && item.options !== null && typeof item.options !== 'string') { skipped++; continue; }
 
-    const { normalized, hash } = await normalizeAndHash(item.question);
+    const { normalized, hash } = await normalizeAndHash(item.question, item.options || undefined);
     if (!normalized) { skipped++; continue; }
 
     stmts.push(

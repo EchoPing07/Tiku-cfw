@@ -6,3 +6,9 @@ dist/
 .DS_Store
 .vscode/
 .playwright-cli/
+
+# 参考项目
+reference/
+
+# 开发文档
+/docs/

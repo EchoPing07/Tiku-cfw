@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { normalizeQuestion, normalizeOptions, normalizeAndHash } from './normalize';
+import { normalizeQuestion, normalizeOptions, normalizeAndHash, questionHash } from './normalize';
 
 describe('normalizeQuestion', () => {
   it('等价写法归一化为同一结果（缓存命中前提）', () => {
@@ -124,6 +124,70 @@ describe('normalizeAndHash（缓存键含选项）', () => {
     const a = await normalizeAndHash('甲\u0000乙');      // 无选项
     const b = await normalizeAndHash('甲', '乙');         // 题干 + 选项
     expect(a.hash).not.toBe(b.hash);
+  });
+});
+
+describe('normalizeAndHash：URL 入键（图题身份）', () => {
+  it('失败模式 B 回归：图不同、周围文字相同 → 哈希不同（不再串答案）', async () => {
+    const a = await normalizeAndHash('如图<img src="https://x.com/a.png">所示，自由度为____');
+    const b = await normalizeAndHash('如图<img src="https://x.com/b.png">所示，自由度为____');
+    expect(a.hash).not.toBe(b.hash);
+  });
+
+  it('同图不同 HTML 包装（img / 裸 URL / markdown）→ 哈希一致（缓存命中）', async () => {
+    const a = await normalizeAndHash('如图<img src="https://x.com/a.png">所示，自由度为____');
+    const b = await normalizeAndHash('如图 https://x.com/a.png 所示，自由度为____');
+    const c = await normalizeAndHash('如图![x](https://x.com/a.png)所示，自由度为____');
+    expect(a.hash).toBe(b.hash);
+    expect(b.hash).toBe(c.hash);
+  });
+
+  it('超星 LaTeX 同图不同渲染参数 → 哈希一致（截断归一）', async () => {
+    const a = await normalizeAndHash('自由度为 https://mooc1.chaoxing.com/ananas/latex/p/12345.png');
+    const b = await normalizeAndHash('自由度为 https://mooc1-1.chaoxing.com/ananas/latex/p/12345');
+    expect(a.hash).not.toBe(b.hash); // 域名不同是不同图床实例，仅参数截断归一
+    const c = await normalizeAndHash('自由度为 https://mooc1.chaoxing.com/ananas/latex/p/12345');
+    expect(a.hash).toBe(c.hash);
+  });
+
+  it('无 URL 题目哈希与旧实现逐字节一致（存量缓存零迁移兼容）', async () => {
+    // 旧键公式：SHA-256(normalizeQuestion(title) [+ '\u0000' + normalizeOptions(options)])
+    const legacy = await questionHash(
+      normalizeQuestion('下列哪项是正确的') + '\u0000' + normalizeOptions('A. 甲\nB. 乙')
+    );
+    const got = await normalizeAndHash('下列哪项是正确的', 'A. 甲\nB. 乙');
+    expect(got.hash).toBe(legacy);
+  });
+
+  it('纯图题归一化非空（不再被“内容无效”拒绝）且返回图片 URL 供路由', async () => {
+    const r = await normalizeAndHash('<img src="https://x.com/a.png">');
+    expect(r.normalized).not.toBe('');
+    expect(r.imageUrls).toEqual(['https://x.com/a.png']);
+    expect(r.hasUrls).toBe(true);
+  });
+
+  it('选项中的 URL 同样入键：同题不同选项图不碰撞', async () => {
+    const T = '下列哪个正确';
+    const a = await normalizeAndHash(T, 'A. <img src="https://x.com/a.png">\nB. 乙');
+    const b = await normalizeAndHash(T, 'A. <img src="https://x.com/b.png">\nB. 乙');
+    expect(a.hash).not.toBe(b.hash);
+  });
+
+  it('Tier 2 URL 入键但不路由：带链接的文本题不送视觉模型', async () => {
+    const r = await normalizeAndHash('详见 https://x.com/doc/page1 说明');
+    expect(r.hasUrls).toBe(true);
+    expect(r.imageUrls).toEqual([]);
+    // 与不带链接的题不同键（链接是题目身份的一部分）
+    const bare = await normalizeAndHash('详见 说明');
+    expect(r.hash).not.toBe(bare.hash);
+  });
+
+  it('URL 与选项同时入键：与仅 URL / 仅选项均不同', async () => {
+    const both = await normalizeAndHash('如图 https://x.com/a.png 所示', 'A. 甲\nB. 乙');
+    const urlOnly = await normalizeAndHash('如图 https://x.com/a.png 所示');
+    const optOnly = await normalizeAndHash('如图所示', 'A. 甲\nB. 乙');
+    expect(both.hash).not.toBe(urlOnly.hash);
+    expect(both.hash).not.toBe(optOnly.hash);
   });
 });
 

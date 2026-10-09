@@ -13,7 +13,8 @@ INSERT OR IGNORE INTO settings (key, value, description) VALUES
     ('cors_origins',        '*',         'CORS 允许的域名'),
     ('system_prompt',       '',          '自定义系统提示词（空=用默认）'),
     ('timezone_offset',     '480',       '统计时区偏移分钟数（480=北京时间 UTC+8）'),
-    ('search_rate_limit',   '120',       '搜题限流：每分钟每密钥最大次数（0=不限）');
+    ('search_rate_limit',   '120',       '搜题限流：每分钟每密钥最大次数（0=不限）'),
+    ('image_url_patterns',  '["/ananas/"]', '图片性 URL 匹配模式（JSON 正则数组；命中即视为图题走视觉模型，默认覆盖超星图床）');
 
 -- 默认 AI 渠道示例（用户需在面板中填写 API Key）。
 -- 仅在 ai_channels 为空时写入（首次建库）：用户删除默认渠道后不会被本迁移复活，

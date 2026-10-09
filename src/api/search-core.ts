@@ -3,6 +3,7 @@ import { normalizeAndHash, normalizeOptions, questionHash } from '../cache/norma
 import { dispatchAI } from '../ai/dispatcher';
 import { isRefusalAnswer } from '../ai/answer-parser';
 import { AIError, type TokenUsage, type AIErrorType, type AttemptRecord, type QuestionType } from '../ai/types';
+import { parseImagePatterns } from '../utils/question-images';
 import { uuid } from '../utils/id';
 
 /** 搜题输入 */
@@ -220,17 +221,38 @@ export async function logBadInput(env: Env, rawBody: string, hash: string, msg: 
   ]);
 }
 
+/** 读取图片性 URL 模式（settings.image_url_patterns 可热更；读取失败/未配置回退默认 /ananas/） */
+async function getImagePatterns(env: Env): Promise<RegExp[]> {
+  try {
+    const row = await env.DB.prepare(
+      "SELECT value FROM settings WHERE key = 'image_url_patterns'"
+    ).first<{ value: string }>();
+    return parseImagePatterns(row?.value);
+  } catch {
+    return parseImagePatterns(null);
+  }
+}
+
 /**
  * 搜题核心流程：归一化 → 查缓存 → 未命中调 AI → 写缓存/日志。
  * apiKeyId 为 null 时（管理面板在线搜题）不更新题库密钥使用统计。
  */
 export async function performSearch(env: Env, input: SearchInput, apiKeyId: string | null): Promise<SearchCoreResult> {
   const title = input.title.trim();
-  const images = input.images || [];
-  const hasImages = images.length > 0;
   const startTime = Date.now();
 
-  const { normalized, hash, optionsNorm } = await normalizeAndHash(title, input.options);
+  // 图片性 URL 模式（超星等无后缀图床）：决定 title/options 内嵌 URL 是否路由到视觉模型
+  const imagePatterns = await getImagePatterns(env);
+
+  // 归一化：URL 摘出占位 + URL 集合入键（同图异形态同键、异图异键）；imageUrls =
+  // title/options 内嵌的图片性 URL（OCS 图题常态：图 URL 内嵌在 title 里，而非 images 数组）
+  const { normalized, hash, optionsNorm, imageUrls, hasUrls } = await normalizeAndHash(title, input.options, {
+    imagePatterns,
+  });
+
+  // 内嵌图片 URL 与显式 images 数组合并去重（客户端数组优先，上限沿用 MAX_IMAGES）
+  const images = [...new Set([...(input.images || []), ...imageUrls])].slice(0, MAX_IMAGES);
+  const hasImages = images.length > 0;
 
   // 归一化后为空（题目只含标点/格式标记等）：不查缓存也不调 AI，
   // 避免所有"空"题目命中同一条 SHA-256("") 缓存互相串答案
@@ -282,12 +304,14 @@ export async function performSearch(env: Env, input: SearchInput, apiKeyId: stri
   // 兼容回退：本修复之前的存量条目哈希仅含题干。带选项的请求在新键未命中时查旧键（题干哈希），
   // 命中后必须校验选项归一化一致才采用——防止“题干相同、选项不同”的两道题串答案；
   // 不一致则视为未命中，走 AI 重新作答（新答案以新键入库，与旧条目隔离）。
+  // 含 URL 的题目直接跳过旧键回退：旧条目键中的 URL 已被归一化打碎（标点剥离），
+  // 与占位符形态必然不同，回退查询只会白多一次往返。
   let legacy: {
     row: { id: string; question: string; answer: string; type: string | null; options: string | null; source: string | null; ai_model: string | null };
     optionsMatch: boolean;
   } | null = null;
 
-  if (optionsNorm) {
+  if (optionsNorm && !hasUrls) {
     const titleOnlyHash = await questionHash(normalized);
     const row = await env.DB.prepare(
       'SELECT id, question, answer, type, options, source, ai_model FROM questions WHERE question_hash = ?'
@@ -337,13 +361,14 @@ export async function performSearch(env: Env, input: SearchInput, apiKeyId: stri
     };
   }
 
-  // 未命中缓存，调用 AI
+  // 未命中缓存，调用 AI（images 合并了内嵌图片 URL：图题走视觉模型）
   try {
     const aiResult = await dispatchAI({
       title,
       type: input.type as QuestionType,
       options: input.options,
       images,
+      imagePatterns,
       env,
     });
 

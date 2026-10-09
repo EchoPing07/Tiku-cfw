@@ -249,6 +249,115 @@ describe('performSearch（缓存键含选项）', () => {
 // ======================================================================
 // performSearch：入库门槛——空答案/拒答不入库（否则拒答文本永久污染缓存）
 // ======================================================================
+describe('performSearch（内嵌图片 URL 检测路由）', () => {
+  it('title 内嵌 <img>：提取图片 URL 合并进 images 走视觉模型（治失败模式 A）', async () => {
+    const { env } = makeEnv({});
+    vi.mocked(dispatchAI).mockResolvedValue(aiResult);
+
+    const r = await performSearch(env, { title: '如图<img src="https://x.com/a.png">所示，自由度为____' }, null);
+
+    expect(r.found).toBe(true);
+    expect(dispatchAI).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(dispatchAI).mock.calls[0][0].images).toEqual(['https://x.com/a.png']);
+  });
+
+  it('title 内嵌裸图片 URL：同样路由视觉模型', async () => {
+    const { env } = makeEnv({});
+    vi.mocked(dispatchAI).mockResolvedValue(aiResult);
+
+    await performSearch(env, { title: '自由度为____ https://x.com/a.png' }, null);
+
+    expect(vi.mocked(dispatchAI).mock.calls[0][0].images).toEqual(['https://x.com/a.png']);
+  });
+
+  it('超星无后缀图（/ananas/ 默认模式）也路由视觉模型，images 为归一化 URL（身份形态）', async () => {
+    const { env } = makeEnv({});
+    vi.mocked(dispatchAI).mockResolvedValue(aiResult);
+
+    await performSearch(env, { title: '自由度为____ https://mooc1.chaoxing.com/ananas/latex/p/12345.png' }, null);
+
+    // images 传归一化 URL（与 dispatcher 端提取键一致，保证图文交错定位与去重）；
+    // 实际抓取用 fetchUrl 原始形态（.png），在 dispatcher 内部处理
+    const call = vi.mocked(dispatchAI).mock.calls[0][0];
+    expect(call.images).toEqual(['https://mooc1.chaoxing.com/ananas/latex/p/12345']);
+  });
+
+  it('内嵌 URL 与显式 images 数组合并去重（客户端数组优先）', async () => {
+    const { env } = makeEnv({});
+    vi.mocked(dispatchAI).mockResolvedValue(aiResult);
+
+    await performSearch(
+      env,
+      { title: '如图 https://x.com/a.png 所示', images: ['https://x.com/a.png', 'https://x.com/b.png'] },
+      null
+    );
+
+    expect(vi.mocked(dispatchAI).mock.calls[0][0].images).toEqual([
+      'https://x.com/a.png',
+      'https://x.com/b.png',
+    ]);
+  });
+
+  it('纯图题不再被“内容无效”拒绝：走 AI 正常作答（治失败模式 D）', async () => {
+    const { env } = makeEnv({});
+    vi.mocked(dispatchAI).mockResolvedValue(aiResult);
+
+    const r = await performSearch(env, { title: '<img src="https://x.com/a.png">' }, null);
+
+    expect(r.found).toBe(true);
+    expect(r.answer).toBe('AI 新答案');
+    expect(r.invalidInput).toBeUndefined();
+    expect(dispatchAI).toHaveBeenCalledTimes(1);
+  });
+
+  it('Tier 2 URL（无图片特征的链接）不路由视觉模型：仍走文本链路', async () => {
+    const { env } = makeEnv({});
+    vi.mocked(dispatchAI).mockResolvedValue(aiResult);
+
+    await performSearch(env, { title: '详见 https://x.com/doc/page1 说明' }, null);
+
+    expect(vi.mocked(dispatchAI).mock.calls[0][0].images).toEqual([]);
+  });
+
+  it('含 URL 的题不走旧键回退（旧键形态必然 miss，省一次查询）', async () => {
+    const { env, executed } = makeEnv({});
+    vi.mocked(dispatchAI).mockResolvedValue(aiResult);
+
+    await performSearch(env, { title: '如图 https://x.com/a.png 所示', options: 'A. 甲\nB. 乙' }, null);
+
+    expect(questionSelects(executed)).toBe(1); // 仅新键一次，无旧键回退
+  });
+
+  it('失败模式 B 回归：图不同同文字的两次搜题互不命中缓存（各自走 AI 入库）', async () => {
+    const { env, executed } = makeEnv({});
+    vi.mocked(dispatchAI).mockResolvedValue(aiResult);
+
+    await performSearch(env, { title: '如图<img src="https://x.com/a.png">所示，自由度为____' }, null);
+    await performSearch(env, { title: '如图<img src="https://x.com/b.png">所示，自由度为____' }, null);
+
+    expect(dispatchAI).toHaveBeenCalledTimes(2); // 第二题不得命中第一题的缓存
+    expect(insertStmts(executed)).toHaveLength(2);
+    const hashA = insertStmts(executed)[0].params[3];
+    const hashB = insertStmts(executed)[1].params[3];
+    expect(hashA).not.toBe(hashB);
+  });
+
+  it('同图不同包装形态的第二次搜题直接命中缓存（不重复调 AI）', async () => {
+    const { hash } = await normalizeAndHash('如图<img src="https://x.com/a.png">所示，自由度为____');
+    const { env } = makeEnv({
+      [hash]: { id: 'q-img', question: '如图…所示，自由度为____', answer: '缓存图题答案' },
+    });
+
+    // 裸 URL 形态与 img 包装同键 → 命中
+    const r = await performSearch(env, { title: '如图 https://x.com/a.png 所示，自由度为____' }, null);
+
+    expect(r.found).toBe(true);
+    expect(r.fromCache).toBe(true);
+    expect(r.answer).toBe('缓存图题答案');
+    expect(dispatchAI).not.toHaveBeenCalled();
+  });
+});
+
 describe('performSearch（入库门槛）', () => {
   it('拒答文本不入库：返回未找到，无 questions INSERT', async () => {
     const { env, executed } = makeEnv({});

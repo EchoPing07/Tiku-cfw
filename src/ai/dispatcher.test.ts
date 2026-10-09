@@ -1,11 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { dispatchAI } from './dispatcher';
 import { callOpenAI } from './openai-client';
+import { fetchImagesAsDataUrls } from './image-fetch';
 import { AIError } from './types';
 import type { AIChannelRow, AIErrorType } from './types';
 import type { Env } from '../types/env';
 
 vi.mock('./openai-client', () => ({ callOpenAI: vi.fn() }));
+// 视觉链路会先在 Worker 侧下载图片转 base64；测试中 mock 为“全部下载失败”
+// （回退原始 URL），避免真实联网
+vi.mock('./image-fetch', () => ({ fetchImagesAsDataUrls: vi.fn(async () => new Map()) }));
 
 const mockedCall = vi.mocked(callOpenAI);
 
@@ -76,8 +80,13 @@ function fixChannelOrder() {
   return vi.spyOn(Math, 'random').mockReturnValue(0);
 }
 
+const mockedFetch = vi.mocked(fetchImagesAsDataUrls);
+
 beforeEach(() => {
   mockedCall.mockReset();
+  mockedFetch.mockReset();
+  // 默认“全部下载失败”（回退原始 URL），个别测试按需覆盖
+  mockedFetch.mockResolvedValue(new Map());
 });
 
 describe('dispatchAI：超时与预算（通道类型区分）', () => {
@@ -238,6 +247,106 @@ describe('dispatchAI：同条目瞬时错误重试', () => {
       clock.mockRestore();
       randomSpy.mockRestore();
     }
+  });
+});
+
+describe('dispatchAI：视觉链路（内嵌图片检测路由 + ANSWER 协议）', () => {
+  it('title 内嵌图片：消息图文交错（图片按原文位置），抓取目标为 fetchUrl 形态', async () => {
+    const { env } = makeEnv([makeChannel({ type: 'vision' })]);
+    mockedCall.mockResolvedValue(okResult);
+    mockedFetch.mockResolvedValue(new Map([['https://x/a.png', 'data:image/png;base64,AAA']]));
+
+    await dispatchAI({
+      title: '前文 https://x/a.png 后文',
+      env,
+      images: ['https://x/a.png'],
+    });
+
+    // 抓取目标：fetchUrl 原始形态
+    expect(mockedFetch.mock.calls[0][0]).toEqual([{ key: 'https://x/a.png', url: 'https://x/a.png' }]);
+    // 消息：图文交错 + data URL 内联
+    const content = mockedCall.mock.calls[0][0].messages[1].content as Array<Record<string, any>>;
+    const img = content.find((p) => p.type === 'image_url')!;
+    expect(img.image_url).toEqual({ url: 'data:image/png;base64,AAA', detail: 'high' });
+    expect(content[0].type).toBe('text');
+  });
+
+  it('超星 LaTeX：抓取用原始 .png 形态，消息用归一化键定位', async () => {
+    const { env } = makeEnv([makeChannel({ type: 'vision' })]);
+    mockedCall.mockResolvedValue(okResult);
+
+    await dispatchAI({
+      title: '自由度为 https://mooc1.chaoxing.com/ananas/latex/p/12345.png',
+      env,
+      images: ['https://mooc1.chaoxing.com/ananas/latex/p/12345'],
+    });
+
+    expect(mockedFetch.mock.calls[0][0]).toEqual([
+      { key: 'https://mooc1.chaoxing.com/ananas/latex/p/12345', url: 'https://mooc1.chaoxing.com/ananas/latex/p/12345.png' },
+    ]);
+    // 抓取失败回退原始 URL
+    const content = mockedCall.mock.calls[0][0].messages[1].content as Array<Record<string, any>>;
+    expect(content.find((p) => p.type === 'image_url')!.image_url.url).toBe(
+      'https://mooc1.chaoxing.com/ananas/latex/p/12345.png'
+    );
+  });
+
+  it('ANSWER 协议解析：编号映射选项正文（多选用 # 连接）', async () => {
+    const { env } = makeEnv([makeChannel({ type: 'vision' })]);
+    mockedCall.mockResolvedValue({ ...okResult, content: '分析过程略\nANSWER: 1 3' });
+
+    const r = await dispatchAI({
+      title: '如图所示 https://x/a.png 下列正确的是',
+      type: 'multiple',
+      options: 'A. 甲\nB. 乙\nC. 丙',
+      env,
+      images: ['https://x/a.png'],
+    });
+
+    expect(r.content).toBe('甲#丙');
+  });
+
+  it('无 ANSWER 行：回退通用 parseAIAnswer（兼容未遵循协议的模型）', async () => {
+    const { env } = makeEnv([makeChannel({ type: 'vision' })]);
+    mockedCall.mockResolvedValue({ ...okResult, content: '答案：传动角' });
+
+    const r = await dispatchAI({
+      title: '如图 https://x/a.png 机构压力角',
+      type: 'completion',
+      env,
+      images: ['https://x/a.png'],
+    });
+
+    expect(r.content).toBe('传动角');
+  });
+
+  it('images 数组中不在文本里的额外图：抓取并追加在消息末尾（不重复内嵌图）', async () => {
+    const { env } = makeEnv([makeChannel({ type: 'vision' })]);
+    mockedCall.mockResolvedValue(okResult);
+
+    await dispatchAI({
+      title: '题干文字',
+      env,
+      images: ['https://extra/1.png', 'https://extra/2.png'],
+    });
+
+    expect(mockedFetch.mock.calls[0][0]).toEqual([
+      { key: 'https://extra/1.png', url: 'https://extra/1.png' },
+      { key: 'https://extra/2.png', url: 'https://extra/2.png' },
+    ]);
+    const content = mockedCall.mock.calls[0][0].messages[1].content as Array<Record<string, any>>;
+    const imgs = content.filter((p) => p.type === 'image_url');
+    expect(imgs).toHaveLength(2);
+  });
+
+  it('无可用视觉条目时直接失败，不浪费图片抓取', async () => {
+    const { env } = makeEnv([]); // 无任何条目
+    mockedFetch.mockClear();
+
+    await expect(
+      dispatchAI({ title: '题 https://x/a.png', env, images: ['https://x/a.png'] })
+    ).rejects.toMatchObject({ errorType: 'no_channel' });
+    expect(mockedFetch).not.toHaveBeenCalled();
   });
 });
 

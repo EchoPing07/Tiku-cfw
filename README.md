@@ -121,6 +121,8 @@ npm run db:seed:local      # 写入初始数据
 npm run db:migrate:share:local  # 密钥分享功能（0004，可选）
 npm run db:migrate:token:local  # Token 用量统计（0005，可选，不执行则仪表盘 Token 显示为 0）
 npm run db:migrate:rate:local   # 登录/搜题限流（0006，可选，不执行则限流不生效）
+npm run db:migrate:params:local # 默认参数调整 + 思考参数列（0009，可选）
+npm run db:migrate:imgpat:local # 图片 URL 匹配模式设置（0010，可选，不执行则用内置默认）
 npm run dev                 # 启动开发服务器 → http://localhost:8787
 
 npm test                    # 单元测试

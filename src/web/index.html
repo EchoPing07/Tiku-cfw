@@ -551,6 +551,7 @@ async function renderSettings(){
       +sRow('熔断冷却时长（分钟）','<input type="number" id="s-cooldown" value="'+esc(s.channel_cooldown_minutes!=null?s.channel_cooldown_minutes:'10')+'" min="0" class="'+S_INPUT+'">','冷却结束后自动恢复调度；0 表示不冷却（仅计数）')
       +'</div>'
       +sRow('系统提示词','<textarea id="s-prompt" rows="6" placeholder="留空使用默认提示词" class="w-full px-3 py-2 bg-white dark:bg-neutral-950 border border-gray-300 dark:border-gray-700 rounded-lg text-sm font-mono focus:border-gray-400 dark:focus:border-gray-500 focus:ring-[3px] focus:ring-gray-200/80 dark:focus:ring-gray-800 transition-shadow">'+esc(s.system_prompt||'')+'</textarea>','自定义 AI 答题的系统提示词')
+      +sRow('图片 URL 匹配模式','<textarea id="s-imgpat" rows="2" placeholder="[&quot;/ananas/&quot;]" class="w-full px-3 py-2 bg-white dark:bg-neutral-950 border border-gray-300 dark:border-gray-700 rounded-lg text-sm font-mono focus:border-gray-400 dark:focus:border-gray-500 focus:ring-[3px] focus:ring-gray-200/80 dark:focus:ring-gray-800 transition-shadow">'+esc(s.image_url_patterns||'["/ananas/"]')+'</textarea>','JSON 正则数组：题目内嵌 URL 命中即视为图题走视觉模型（图片后缀自动识别）；覆盖无后缀图床，默认超星 /ananas/')
     +'</div>')
     +sCard('日志','<div class="space-y-3.5">'
       +sRow('日志保留天数','<input type="number" id="s-logdays" value="'+esc(s.log_retention_days||'30')+'" min="0" class="'+S_INPUT+'">','0 表示永久保留，过期日志每日定时清理')
@@ -562,7 +563,7 @@ async function saveAllSettings(){
   const btn=document.getElementById('s-save-btn');if(!btn)return;
   const orig=btn.innerHTML;btn.disabled=true;btn.innerHTML='<span class="spin"></span>保存中…';
   const g=id=>document.getElementById(id).value;
-  const payload={site_name:g('s-sitename').trim(),timezone_offset:g('s-tz'),cors_origins:g('s-cors').trim(),search_rate_limit:g('s-ratelimit'),ai_timeout:g('s-timeout'),vision_timeout:g('s-vtimeout'),key_fail_threshold:g('s-failthreshold'),channel_cooldown_minutes:g('s-cooldown'),log_retention_days:g('s-logdays'),system_prompt:g('s-prompt')};
+  const payload={site_name:g('s-sitename').trim(),timezone_offset:g('s-tz'),cors_origins:g('s-cors').trim(),search_rate_limit:g('s-ratelimit'),ai_timeout:g('s-timeout'),vision_timeout:g('s-vtimeout'),key_fail_threshold:g('s-failthreshold'),channel_cooldown_minutes:g('s-cooldown'),log_retention_days:g('s-logdays'),system_prompt:g('s-prompt'),image_url_patterns:g('s-imgpat')};
   try{await API.put('/api/admin/settings',payload);applyTzOffset(payload.timezone_offset);applySiteName(payload.site_name);toast('设置已保存','success');}
   catch(e){toast(e.message,'error');}
   finally{btn.disabled=false;btn.innerHTML=orig;}

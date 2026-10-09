@@ -6,6 +6,9 @@ import { buildSystemPrompt, buildUserMessage, buildVisionMessage } from './promp
 import { parseAIAnswer } from './answer-parser';
 import { parseExtraParams } from './extra-params';
 import { appendAttempt, buildRequestEnvelope, buildResponseEnvelope, maskKey } from './debug-envelope';
+import { fetchImagesAsDataUrls } from './image-fetch';
+import { extractImageMatches, parseImagePatterns } from '../utils/question-images';
+import { classifyUrlQuestionMode, buildUrlOptionMapForMode, resolveUrlAnswer, type UrlQuestionMode } from './url-question';
 import type { QuestionType } from './types';
 
 interface DispatchOptions {
@@ -13,6 +16,8 @@ interface DispatchOptions {
   type?: QuestionType;
   options?: string;
   images?: string[];
+  /** 图片性 URL 模式（settings.image_url_patterns；缺省用默认 /ananas/） */
+  imagePatterns?: RegExp[];
   env: Env;
 }
 
@@ -88,21 +93,8 @@ export async function dispatchAI(opts: DispatchOptions): Promise<DispatchResult>
   const budgetMs = channelType === 'vision' ? MAX_DISPATCH_VISION_MS : MAX_DISPATCH_MS;
   const deadline = Date.now() + budgetMs;
 
-  // 构建消息
-  let messages: ChatMessage[];
-  if (channelType === 'vision' && images && images.length > 0) {
-    messages = [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: buildVisionMessage(title, images, type, options) },
-    ];
-  } else {
-    messages = [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: buildUserMessage(title, type, options) },
-    ];
-  }
-
-  // 查询该类型下所有启用、有 Key、不在熔断冷却中的条目（单条查询，替代原“模型+Key”两条）
+  // 查询该类型下所有启用、有 Key、不在熔断冷却中的条目（单条查询，替代原“模型+Key”两条）。
+  // 提前到消息构建之前：无可用条目直接失败，不浪费图片抓取
   const channels = await env.DB.prepare(
     `SELECT * FROM ai_channels
      WHERE type = ? AND enabled = 1
@@ -131,6 +123,65 @@ export async function dispatchAI(opts: DispatchOptions): Promise<DispatchResult>
         : `没有可用的${channelType === 'text' ? '文本' : '视觉'}模型（请检查是否已添加并启用、是否填写了 API Key）`,
       'no_channel'
     );
+  }
+
+  // 构建消息；图题同时准备 ANSWER 协议的答案解析器（编号/字母 → 选项正文）
+  let messages: ChatMessage[];
+  let answerMode: UrlQuestionMode | null = null;
+  let answerOptionMap: Map<string, string> | null = null;
+
+  if (channelType === 'vision' && images && images.length > 0) {
+    // 1. 提取 title/options 内嵌图片（带位置信息，供图文交错与抓取）
+    const patterns = opts.imagePatterns ?? parseImagePatterns(null);
+    const titleMatches = extractImageMatches(title, { patterns });
+    const optionsMatches = options ? extractImageMatches(options, { patterns }) : [];
+    const textUrls = new Set([...titleMatches, ...optionsMatches].map((m) => m.url));
+
+    // 2. images 参数中不在题目文本里的额外图（无位置信息，消息末尾追加）
+    const extraImages = images.filter((u) => u && !textUrls.has(u));
+
+    // 3. Worker 侧伪装下载（UA/Referer 伪装 → 魔数嗅探 → base64 内联）；单图失败回退原始
+    //    URL（厂商代抓兜底）；下载耗时计入调度总预算
+    const fetchEntries: Array<{ key: string; url: string }> = [];
+    const seen = new Set<string>();
+    for (const m of [...titleMatches, ...optionsMatches]) {
+      if (m.isImage && !seen.has(m.url)) {
+        seen.add(m.url);
+        fetchEntries.push({ key: m.url, url: m.fetchUrl });
+      }
+    }
+    for (const u of extraImages) {
+      if (u && !seen.has(u)) {
+        seen.add(u);
+        fetchEntries.push({ key: u, url: u });
+      }
+    }
+    let dataUrls = new Map<string, string>();
+    if (fetchEntries.length > 0) {
+      try {
+        dataUrls = await fetchImagesAsDataUrls(fetchEntries);
+      } catch {
+        // 全部回退原始 URL，不阻塞搜题
+      }
+    }
+    const resolvedImages = new Map<string, string>();
+    for (const e of fetchEntries) {
+      resolvedImages.set(e.key, dataUrls.get(e.key) ?? e.url);
+    }
+
+    // 4. 图文交错消息（图片按原文位置插入）+ ANSWER 协议
+    messages = [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: buildVisionMessage(title, options, resolvedImages, extraImages, type, patterns) },
+    ];
+
+    answerMode = classifyUrlQuestionMode(type, options);
+    answerOptionMap = buildUrlOptionMapForMode(answerMode, options);
+  } else {
+    messages = [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: buildUserMessage(title, type, options) },
+    ];
   }
 
   // 加权随机生成尝试顺序（失败不放回）；瞬时类错误在同条目上退避重试一次（见循环内）
@@ -204,8 +255,13 @@ export async function dispatchAI(opts: DispatchOptions): Promise<DispatchResult>
           latency_ms: Date.now() - startedAt,
         });
 
-        // 解析答案
-        const parsedAnswer = parseAIAnswer(result.content, type);
+        // 解析答案：图题优先 ANSWER 协议（编号/字母 → 选项正文）；无 ANSWER 行（模型未遵循
+        // 协议）回退通用解析
+        const parsedAnswer =
+          answerMode !== null
+            ? resolveUrlAnswer(result.content, answerOptionMap ?? new Map(), answerMode) ||
+              parseAIAnswer(result.content, type)
+            : parseAIAnswer(result.content, type);
 
         return {
           content: parsedAnswer,

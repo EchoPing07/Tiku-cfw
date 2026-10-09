@@ -10,7 +10,7 @@ export interface ChatMessage {
   content: string | Array<{
     type: 'text' | 'image_url';
     text?: string;
-    image_url?: { url: string };
+    image_url?: { url: string; detail?: 'high' | 'low' | 'auto' };
   }>;
 }
 

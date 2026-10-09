@@ -1,3 +1,6 @@
+import { splitTextImageParts } from '../utils/question-images';
+import { classifyUrlQuestionMode, buildUrlOptionMapForMode, buildUrlQuestionPromptParts } from './url-question';
+
 /** 默认系统提示词 */
 export const DEFAULT_SYSTEM_PROMPT = `你是一个专业的题库答题助手。请根据提供的题目和选项，给出正确答案。
 
@@ -52,32 +55,67 @@ export function buildUserMessage(title: string, type?: string, options?: string)
   return lines.join('\n');
 }
 
-/** 构建视觉模型用户消息（含图片） */
+/** 视觉消息 content 分片（types.ts ChatMessage 子结构，带 OpenAI 视觉 detail 精细度） */
+export interface VisionContentPart {
+  type: 'text' | 'image_url';
+  text?: string;
+  image_url?: { url: string; detail?: 'high' | 'low' | 'auto' };
+}
+
+/** ANSWER 协议指令（注入 user 消息尾部；不动可配置的 system 提示词） */
+function visionAnswerInstruction(answerRule: string): string {
+  return (
+    '\n请仔细分析题目内容与图片（图片按原文位置插入）。' +
+    '在回答末尾，严格按照以下格式单独一行给出最终答案：\nANSWER: <答案>\n\n作答规则：\n' +
+    answerRule
+  );
+}
+
+/**
+ * 构建视觉模型用户消息（图文交错 + ANSWER 协议）。
+ *
+ * - 文本按 URL 位置拆成 text / image_url 交替分片，图片保持原文位置，模型能对上
+ *   “如图”指的是哪一张；
+ * - 选项按模式重新编号（消除 A./B. 与空行序号混乱），或作为补充材料保留；
+ * - imageMap：归一化 URL → 已解析 URL（抓取成功为 data URL，失败回退原始 URL 由厂商代抓）；
+ * - extraImages：客户端 images 数组中不在题目文本里的图（无位置信息，末尾追加）；
+ * - detail: 'high'：公式/图表类小图需高精细度识别。
+ */
 export function buildVisionMessage(
   title: string,
-  images: string[],
+  options: string | undefined,
+  imageMap: Map<string, string>,
+  extraImages: string[],
   type?: string,
-  options?: string
-): Array<{ type: 'text' | 'image_url'; text?: string; image_url?: { url: string } }> {
-  const textParts: string[] = [];
+  patterns?: RegExp[]
+): VisionContentPart[] {
+  // 题型模式推断（type 缺失时不盲猜：解析不出选项块按开放题处理）
+  const mode = classifyUrlQuestionMode(type, options);
+  const optionMap = buildUrlOptionMapForMode(mode, options);
+  const { optionsText, answerRule } = buildUrlQuestionPromptParts(mode, options || '', optionMap);
 
+  const lines: string[] = [];
   if (type) {
-    textParts.push(`题目类型：${TYPE_LABELS[type] || type}`);
+    lines.push(`题目类型：${TYPE_LABELS[type] || type}`);
   }
-  textParts.push(`题目：${title}`);
+  lines.push(`题目：${title}`);
+  if (optionsText) lines.push(optionsText);
+  lines.push(visionAnswerInstruction(answerRule));
 
-  if (options) {
-    textParts.push(`选项：`);
-    textParts.push(options);
+  // 完整文本按 URL 位置拆分（图片性 URL → image 分片，其余 URL 留在文本中）
+  const parts: VisionContentPart[] = splitTextImageParts(lines.join('\n'), { patterns }).map((p) =>
+    p.type === 'text'
+      ? { type: 'text' as const, text: p.text }
+      : {
+          type: 'image_url' as const,
+          image_url: { url: imageMap.get(p.url!) ?? p.url!, detail: 'high' as const },
+        }
+  );
+
+  // 客户端 images 数组中不在题目文本里的图（无位置信息，统一追加在末尾）
+  for (const u of extraImages) {
+    if (!u) continue;
+    parts.push({ type: 'image_url', image_url: { url: imageMap.get(u) ?? u, detail: 'high' } });
   }
-
-  const content: Array<{ type: 'text' | 'image_url'; text?: string; image_url?: { url: string } }> = [
-    { type: 'text', text: textParts.join('\n') },
-  ];
-
-  for (const url of images) {
-    content.push({ type: 'image_url', image_url: { url } });
-  }
-
-  return content;
+  return parts;
 }

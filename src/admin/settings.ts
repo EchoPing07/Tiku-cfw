@@ -61,6 +61,29 @@ async function updateSettings(request: Request, env: Env): Promise<Response> {
     if (!Number.isFinite(n) || n < 5 || n > 600) return error('vision_timeout 无效（5~600 秒）');
     body.vision_timeout = String(Math.floor(n));
   }
+  if (body.image_url_patterns !== undefined) {
+    // JSON 字符串数组，元素为合法正则源；空串=恢复默认；逐条校验防止垃圾配置阻塞搜题
+    const raw = String(body.image_url_patterns);
+    if (raw.trim()) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        return error('image_url_patterns 必须是 JSON 字符串数组，如 ["/ananas/"]');
+      }
+      if (!Array.isArray(parsed) || parsed.length > 20 || !parsed.every((x) => typeof x === 'string')) {
+        return error('image_url_patterns 必须是字符串数组（≤20 条），如 ["/ananas/"]');
+      }
+      for (const s of parsed as string[]) {
+        if (!s.trim()) return error('image_url_patterns 包含空正则');
+        try {
+          new RegExp(s);
+        } catch {
+          return error(`image_url_patterns 含非法正则：${s}`);
+        }
+      }
+    }
+  }
 
   for (const [key, value] of Object.entries(body)) {
     await env.DB.prepare(

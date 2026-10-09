@@ -1,5 +1,8 @@
 /** 题目归一化：去除 HTML 标签、标点、空白等干扰内容 */
 export function normalizeQuestion(question: string): string {
+  // 注意：URL（<img> src、裸链接）必须在本函数之前由 extractUrlInfo 摘出并以
+  // __URL__ 占位替换——否则 <img> 里的 URL 随标签一起被剥离，两道图不同、
+  // 周围文字相同的题会归一化到同一缓存键，互相串错误答案。
   return question
     .replace(/<[^>]+>/g, '')                         // HTML 标签
     .replace(/&[a-z]+;/gi, ' ')                      // HTML 实体 → 空格
@@ -63,30 +66,51 @@ export async function questionHash(normalized: string): Promise<string> {
     .join('');
 }
 
+import { extractUrlInfo } from '../utils/question-images';
+
 export interface NormalizedQuestion {
-  /** 题干归一化（不含选项） */
+  /** 题干归一化（不含选项；URL 已替换为 __url__ 占位符） */
   normalized: string;
   /** 选项归一化（未传选项或归一化为空时为空串） */
   optionsNorm: string;
   /**
-   * 缓存键哈希：有选项时 = SHA-256(题干归一化 + '\u0000' + 选项归一化)，
-   * 无选项时 = SHA-256(题干归一化)（与旧版键一致，存量无选项缓存直接兼容）。
-   * 选项入键修复：题干相同、选项不同的题不再共享同一条缓存。
+   * 缓存键哈希：
+   * - 无选项无 URL：SHA-256(题干归一化)（与旧版键一致，存量缓存直接兼容）；
+   * - 有选项：SHA-256(题干归一化 + '\u0000' + 选项归一化)；
+   * - 有 URL：再追加 '\u0000' + 排序去重 URL 集合（URL 是图题的身份证：
+   *   同图不同 HTML 包装 → 同键命中；不同图 → 异键隔离）。
    */
   hash: string;
+  /** 图片性 URL（Tier 1/1.5，按首次出现顺序去重），供视觉路由 */
+  imageUrls: string[];
+  /** 是否提取到任何 URL（含 Tier 2）；有 URL 时旧键回退查询必然 miss，可跳过 */
+  hasUrls: boolean;
 }
 
-/** 归一化 + 哈希（题干 + 选项组合键），一步到位 */
+/** 归一化 + 哈希（题干 + 选项 + URL 集合组合键），一步到位 */
 export async function normalizeAndHash(
   question: string,
-  options?: string
+  options?: string,
+  opts?: { imagePatterns?: RegExp[] }
 ): Promise<NormalizedQuestion> {
-  const normalized = normalizeQuestion(question);
-  const optionsNorm = options ? normalizeOptions(options) : '';
-  // 题干侧剥离控制字符：\u0000 是题干/选项分界符，不能让题干文本伪造边界。
-  // 选项侧不可在此处再剥 \u0001（行分隔符在 join 后是键的一部分，剥掉会丢失选项条数信息，
-  // 导致 {甲,乙} 与 {乙甲} 这类不同选项集碰撞）；选项行已在 normalizeOptions 内逐行清洗。
+  const extractOpts = opts?.imagePatterns ? { patterns: opts.imagePatterns } : undefined;
+  const titleInfo = extractUrlInfo(question, extractOpts);
+  const optionsInfo = options ? extractUrlInfo(options, extractOpts) : null;
+
+  const normalized = normalizeQuestion(titleInfo.text);
+  const optionsNorm = optionsInfo ? normalizeOptions(optionsInfo.text) : '';
+
+  // URL 集合（排序去重）参与键：身份独立于题干文本——既不丢（不会碰撞）也不扰（不污染文本归一化）
+  const urlSet = [...new Set([...titleInfo.urls, ...(optionsInfo?.urls ?? [])])].filter(Boolean).sort();
+
+  // 题干侧剥离控制字符：\u0000 是键分界符，不能让题干文本伪造边界。
+  // 选项侧不可在此处再剥 \u0001（行分隔符在 join 后是键的一部分，剥掉会丢失选项条数信息）；
+  // 选项行已在 normalizeOptions 内逐行清洗。
   const titlePart = normalized.replace(/[\u0000\u0001]/g, '');
-  const hash = await questionHash(optionsNorm ? titlePart + '\u0000' + optionsNorm : titlePart);
-  return { normalized, optionsNorm, hash };
+  let key = optionsNorm ? titlePart + '\u0000' + optionsNorm : titlePart;
+  if (urlSet.length > 0) key += '\u0000' + urlSet.join('\n');
+  const hash = await questionHash(key);
+
+  const imageUrls = [...new Set([...titleInfo.imageUrls, ...(optionsInfo?.imageUrls ?? [])])];
+  return { normalized, optionsNorm, hash, imageUrls, hasUrls: urlSet.length > 0 };
 }

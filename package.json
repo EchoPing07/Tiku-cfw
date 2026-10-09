@@ -20,6 +20,8 @@
     "db:migrate:entry:local": "wrangler d1 execute tiku-cfw-db --local --file=migrations/0007_channel_entry_and_trace.sql",
     "db:migrate:params": "wrangler d1 execute tiku-cfw-db --file=migrations/0009_param_defaults.sql",
     "db:migrate:params:local": "wrangler d1 execute tiku-cfw-db --local --file=migrations/0009_param_defaults.sql",
+    "db:migrate:imgpat": "wrangler d1 execute tiku-cfw-db --file=migrations/0010_image_url_patterns.sql",
+    "db:migrate:imgpat:local": "wrangler d1 execute tiku-cfw-db --local --file=migrations/0010_image_url_patterns.sql",
     "db:seed": "wrangler d1 execute tiku-cfw-db --file=migrations/0002_seed.sql",
     "db:seed:local": "wrangler d1 execute tiku-cfw-db --local --file=migrations/0002_seed.sql",
     "typecheck": "tsc --noEmit",

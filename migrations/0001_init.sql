@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
 CREATE TABLE IF NOT EXISTS ai_channels (
     id            TEXT PRIMARY KEY,
     name          TEXT NOT NULL,
-    type          TEXT NOT NULL,               -- text 文本 / vision 视觉
+    type          TEXT NOT NULL,               -- text 纯文本 / vision 支持视觉（文本+图片）
     base_url      TEXT NOT NULL,
     model         TEXT NOT NULL,
     api_key       TEXT,                        -- 条目自带单 Key
@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS ai_channels (
     temperature   REAL DEFAULT 0.7,
     max_tokens    INTEGER DEFAULT 4096,
     extra_params  TEXT,                        -- 条目级附加请求参数（JSON 对象字符串，如 {"enable_thinking": false}）
+    thinking_level TEXT,                       -- 条目级思考等级（off/low/medium/high；NULL=跟随厂商默认）
     enabled       INTEGER DEFAULT 1,
     use_count     INTEGER DEFAULT 0,
     fail_count    INTEGER DEFAULT 0,

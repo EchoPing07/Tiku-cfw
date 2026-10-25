@@ -6,15 +6,16 @@
 INSERT OR IGNORE INTO settings (key, value, description) VALUES
     ('site_name',           'Tiku-cfw',  '站点名称'),
     ('log_retention_days',  '30',        '日志保留天数（0=永久）'),
-    ('ai_timeout',          '30',        'AI 请求超时秒数（文本模型；视觉模型用 vision_timeout）'),
-    ('vision_timeout',      '60',        '视觉模型单次请求超时秒数（默认 60；文本模型用 ai_timeout）'),
+    ('ai_timeout',          '30',        'AI 请求超时秒数（纯文本题；带图题用 vision_timeout）'),
+    ('vision_timeout',      '60',        '带图题单次请求超时秒数（默认 60；纯文本题用 ai_timeout）'),
     ('key_fail_threshold',  '3',         '模型连续失败熔断阈值（达到后进入冷却）'),
     ('channel_cooldown_minutes', '10',    '模型熔断后的冷却分钟数（0=仅计数不冷却）'),
     ('cors_origins',        '*',         'CORS 允许的域名'),
     ('system_prompt',       '',          '自定义系统提示词（空=用默认）'),
     ('timezone_offset',     '480',       '统计时区偏移分钟数（480=北京时间 UTC+8）'),
     ('search_rate_limit',   '120',       '搜题限流：每分钟每密钥最大次数（0=不限）'),
-    ('image_url_patterns',  '["/ananas/"]', '图片性 URL 匹配模式（JSON 正则数组；命中即视为图题走视觉模型，默认覆盖超星图床）');
+    ('image_url_patterns',  '["/ananas/"]', '图片性 URL 匹配模式（JSON 正则数组；命中即视为图题走视觉模型，默认覆盖超星图床）'),
+    ('text_exclude_vision', '0',         '纯文本题是否绕过视觉条目（1=仅纯文本模型；0=全量模型，默认）');
 
 -- 默认 AI 渠道示例（用户需在面板中填写 API Key）。
 -- 仅在 ai_channels 为空时写入（首次建库）：用户删除默认渠道后不会被本迁移复活，

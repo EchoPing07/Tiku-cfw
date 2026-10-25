@@ -1,7 +1,7 @@
 /** 题目类型 */
 export type QuestionType = 'single' | 'multiple' | 'judgement' | 'completion' | undefined;
 
-/** AI 模型类型（text 文本 / vision 视觉） */
+/** AI 模型类型（text 纯文本 / vision 支持视觉：文本 + 图片都能答） */
 export type ChannelType = 'text' | 'vision';
 
 /** 聊天消息 */
@@ -100,6 +100,8 @@ export interface AIChannelRow {
   max_tokens: number;
   /** 条目级附加请求参数（JSON 对象字符串，如 {"enable_thinking": false}；NULL/空 = 不附加） */
   extra_params: string | null;
+  /** 条目级思考等级（off/low/medium/high；NULL = 跟随厂商默认，见 src/ai/thinking.ts） */
+  thinking_level: string | null;
   enabled: number;
   use_count: number;
   fail_count: number;

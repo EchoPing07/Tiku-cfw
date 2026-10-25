@@ -61,6 +61,10 @@ async function updateSettings(request: Request, env: Env): Promise<Response> {
     if (!Number.isFinite(n) || n < 5 || n > 600) return error('vision_timeout 无效（5~600 秒）');
     body.vision_timeout = String(Math.floor(n));
   }
+  if (body.text_exclude_vision !== undefined) {
+    // 布尔开关归一为 '0'/'1'（纯文本题是否绕过视觉条目）
+    body.text_exclude_vision = body.text_exclude_vision === '1' ? '1' : '0';
+  }
   if (body.image_url_patterns !== undefined) {
     // JSON 字符串数组，元素为合法正则源；空串=恢复默认；逐条校验防止垃圾配置阻塞搜题
     const raw = String(body.image_url_patterns);

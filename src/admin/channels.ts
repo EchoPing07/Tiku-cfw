@@ -6,6 +6,7 @@ import { uuid } from '../utils/id';
 import { parseJsonBody } from '../utils/request';
 import { callOpenAI } from '../ai/openai-client';
 import { parseExtraParams, validateExtraParams } from '../ai/extra-params';
+import { buildThinkingParams, normalizeThinkingLevel } from '../ai/thinking';
 
 /** 模型管理路由（模型条目化：一个条目 = 端点 + 模型 + 单个 API Key + 权重） */
 export async function channelsHandler(request: Request, env: Env, path: string): Promise<Response> {
@@ -75,6 +76,8 @@ interface ChannelBody {
   max_tokens?: number;
   /** 条目级附加请求参数：JSON 字符串（表单）或对象（API）；空 = 清除 */
   extra_params?: string | Record<string, unknown> | null;
+  /** 条目级思考等级：off/low/medium/high；空 = 清除（跟随厂商默认） */
+  thinking_level?: string | null;
   enabled?: number;
 }
 
@@ -85,6 +88,7 @@ function validateChannelFields(body: ChannelBody): string | null {
   if (body.temperature !== undefined && (!Number.isFinite(body.temperature) || body.temperature < 0 || body.temperature > 2)) return 'temperature 必须在 0~2 之间';
   if (body.max_tokens !== undefined && (!Number.isFinite(body.max_tokens) || body.max_tokens < 1)) return 'max_tokens 必须 >= 1';
   if (body.api_key !== undefined && (typeof body.api_key !== 'string' || !body.api_key.trim())) return 'API Key 不能为空';
+  if (body.thinking_level !== undefined && !normalizeThinkingLevel(body.thinking_level).ok) return '思考等级必须为 off/low/medium/high（留空=跟随厂商默认）';
   return null;
 }
 
@@ -107,12 +111,14 @@ async function createChannel(request: Request, env: Env): Promise<Response> {
   const maxTokens = body.max_tokens ?? 4096;
   const extra = validateExtraParams(body.extra_params);
   if (!extra.ok) return error(extra.msg || '附加参数无效');
+  const thinking = normalizeThinkingLevel(body.thinking_level);
+  if (!thinking.ok) return error(thinking.msg || '思考等级无效');
 
   const id = uuid();
   await env.DB.prepare(
-    `INSERT INTO ai_channels (id, name, type, base_url, model, api_key, weight, temperature, max_tokens, extra_params, enabled)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`
-  ).bind(id, body.name, body.type, body.base_url, body.model, body.api_key.trim(), weight, temperature, maxTokens, extra.value).run();
+    `INSERT INTO ai_channels (id, name, type, base_url, model, api_key, weight, temperature, max_tokens, extra_params, thinking_level, enabled)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`
+  ).bind(id, body.name, body.type, body.base_url, body.model, body.api_key.trim(), weight, temperature, maxTokens, extra.value, thinking.value).run();
 
   return json({ id, msg: '创建成功' });
 }
@@ -143,6 +149,11 @@ async function updateChannel(request: Request, env: Env, id: string): Promise<Re
     const extra = validateExtraParams(body.extra_params);
     if (!extra.ok) return error(extra.msg || '附加参数无效');
     sets.push('extra_params = ?'); params.push(extra.value);
+  }
+  if (body.thinking_level !== undefined) {
+    const thinking = normalizeThinkingLevel(body.thinking_level);
+    if (!thinking.ok) return error(thinking.msg || '思考等级无效');
+    sets.push('thinking_level = ?'); params.push(thinking.value);
   }
   if (body.enabled !== undefined) { sets.push('enabled = ?'); params.push(body.enabled); }
   params.push(id);
@@ -202,8 +213,11 @@ async function testChannelConnection(env: Env, id: string): Promise<Response> {
       temperature: 0,
       maxTokens: 1024,
       timeout: 15,
-      // 连通性测试也带附加参数：验证厂商是否接受（否则测试通过、真搜题却 400）
-      extraParams: parseExtraParams(channel.extra_params as string | null),
+      // 连通性测试也带附加参数与思考等级参数：验证厂商是否接受（否则测试通过、真搜题却 400）
+      extraParams: {
+        ...buildThinkingParams(channel.model as string, channel.thinking_level),
+        ...parseExtraParams(channel.extra_params as string | null),
+      },
       allowEmptyContent: true,
     });
     ok = true;

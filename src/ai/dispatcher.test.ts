@@ -17,7 +17,7 @@ function makeChannel(overrides: Partial<AIChannelRow> = {}): AIChannelRow {
   return {
     id: 'ch1', name: '渠道A', type: 'text', base_url: 'https://a.test/v1',
     model: 'test-model', api_key: 'sk-abcdefghijklmnop', weight: 1,
-    temperature: 0.7, max_tokens: 4096, extra_params: null,
+    temperature: 0.7, max_tokens: 4096, extra_params: null, thinking_level: null,
     enabled: 1, use_count: 0, fail_count: 0,
     last_used: null, disabled_until: null,
     created_at: '2024-01-01 00:00:00', updated_at: '2024-01-01 00:00:00',
@@ -40,7 +40,12 @@ function makeEnv(channels: AIChannelRow[], settings: Record<string, string> = {}
             return { results: Object.entries(settings).map(([key, value]) => ({ key, value })) as T[] };
           }
           if (/FROM ai_channels/.test(sql)) {
-            return { results: channels.filter(c => c.type === stmt.params[0]) as T[] };
+            // 复刻调度器的类型路由：SQL 含 type = 'vision' → 仅视觉条目；
+            // 含 type = 'text'（text_exclude_vision 开启）→ 仅纯文本条目；否则全量
+            let list = channels;
+            if (/type = 'vision'/.test(sql)) list = list.filter(c => c.type === 'vision');
+            else if (/type = 'text'/.test(sql)) list = list.filter(c => c.type === 'text');
+            return { results: list as T[] };
           }
           return { results: [] };
         },
@@ -371,5 +376,98 @@ describe('dispatchAI：条目级附加参数（extra_params）', () => {
     mockedCall.mockResolvedValue(okResult);
     await dispatchAI({ title: '题目', env });
     expect(mockedCall.mock.calls[0][0].extraParams).toBeUndefined();
+  });
+});
+
+describe('dispatchAI：模型路由（带图题/纯文本题）', () => {
+  it('带图题仅视觉条目参与（绕过纯文本模型）', async () => {
+    const { env } = makeEnv([
+      makeChannel({ type: 'text', base_url: 'https://t.test/v1' }),
+      makeChannel({ id: 'ch2', name: '渠道B', type: 'vision', base_url: 'https://v.test/v1' }),
+    ]);
+    mockedCall.mockResolvedValue(okResult);
+    const r = await dispatchAI({ title: '题 https://x/a.png', env, images: ['https://x/a.png'] });
+    expect(r.channelName).toBe('渠道B');
+    expect(mockedCall.mock.calls[0][0].baseUrl).toBe('https://v.test/v1');
+    expect(mockedCall).toHaveBeenCalledTimes(1);
+  });
+
+  it('纯文本题默认全量条目参与（视觉条目也答文本题）', async () => {
+    const randomSpy = fixChannelOrder();
+    try {
+      const { env } = makeEnv([
+        makeChannel({ type: 'text', base_url: 'https://t.test/v1' }),
+        makeChannel({ id: 'ch2', name: '渠道B', type: 'vision', base_url: 'https://v.test/v1' }),
+      ]);
+      mockedCall.mockImplementation(async (req) => {
+        if (req.baseUrl === 'https://v.test/v1') return okResult;
+        throw aiErr('http_auth', '无效 Key', 401);
+      });
+
+      const r = await dispatchAI({ title: '题目', env });
+
+      expect(r.channelName).toBe('渠道B'); // 文本条目失败后转移到视觉条目
+      expect(r.attempts.map(a => a.channel)).toEqual(['渠道A', '渠道B']);
+    } finally {
+      randomSpy.mockRestore();
+    }
+  });
+
+  it('开启 text_exclude_vision 后纯文本题绕过视觉条目', async () => {
+    const { env } = makeEnv(
+      [
+        makeChannel({ type: 'text', base_url: 'https://t.test/v1' }),
+        makeChannel({ id: 'ch2', name: '渠道B', type: 'vision', base_url: 'https://v.test/v1' }),
+      ],
+      { text_exclude_vision: '1' },
+    );
+    mockedCall.mockImplementation(async () => { throw aiErr('http_auth', '无效 Key', 401); });
+
+    await expect(dispatchAI({ title: '题目', env })).rejects.toMatchObject({ errorType: 'http_auth' });
+    expect(mockedCall).toHaveBeenCalledTimes(1); // 视觉条目未被尝试
+  });
+
+  it('开启 text_exclude_vision 后带图题仍仅用视觉条目', async () => {
+    const { env } = makeEnv(
+      [
+        makeChannel({ type: 'text' }),
+        makeChannel({ id: 'ch2', name: '渠道B', type: 'vision' }),
+      ],
+      { text_exclude_vision: '1' },
+    );
+    mockedCall.mockResolvedValue(okResult);
+
+    const r = await dispatchAI({ title: '题 https://x/a.png', env, images: ['https://x/a.png'] });
+
+    expect(r.channelName).toBe('渠道B');
+  });
+});
+
+describe('dispatchAI：条目级思考等级（thinking_level）', () => {
+  it('按模型 ID 自动映射厂商思考参数（Qwen off → enable_thinking: false）', async () => {
+    const { env } = makeEnv([makeChannel({ model: 'qwen3-max', thinking_level: 'off' })]);
+    mockedCall.mockResolvedValue(okResult);
+    await dispatchAI({ title: '题目', env });
+    expect(mockedCall.mock.calls[0][0].extraParams).toEqual({ enable_thinking: false });
+  });
+
+  it('与 extra_params 同键时以 extra_params 为准（手工配置优先）', async () => {
+    const { env } = makeEnv([makeChannel({
+      model: 'glm-4.6', thinking_level: 'high',
+      extra_params: '{"thinking": {"type": "disabled"}}',
+    })]);
+    mockedCall.mockResolvedValue(okResult);
+    await dispatchAI({ title: '题目', env });
+    expect(mockedCall.mock.calls[0][0].extraParams).toEqual({ thinking: { type: 'disabled' } });
+  });
+
+  it('与 extra_params 不同键时合并下发', async () => {
+    const { env } = makeEnv([makeChannel({
+      model: 'o4-mini', thinking_level: 'high',
+      extra_params: '{"top_k": 5}',
+    })]);
+    mockedCall.mockResolvedValue(okResult);
+    await dispatchAI({ title: '题目', env });
+    expect(mockedCall.mock.calls[0][0].extraParams).toEqual({ reasoning_effort: 'high', top_k: 5 });
   });
 });

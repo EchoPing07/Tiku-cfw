@@ -1,10 +1,11 @@
 import type { Env } from '../types/env';
-import type { ChatMessage, ChannelType, DispatchResult, AIChannelRow, AttemptRecord, AIErrorType } from './types';
+import type { ChatMessage, DispatchResult, AIChannelRow, AttemptRecord, AIErrorType } from './types';
 import { AIError } from './types';
 import { callOpenAI } from './openai-client';
 import { buildSystemPrompt, buildUserMessage, buildVisionMessage } from './prompt';
 import { parseAIAnswer } from './answer-parser';
 import { parseExtraParams } from './extra-params';
+import { buildThinkingParams } from './thinking';
 import { appendAttempt, buildRequestEnvelope, buildResponseEnvelope, maskKey } from './debug-envelope';
 import { fetchImagesAsDataUrls } from './image-fetch';
 import { extractImageMatches, parseImagePatterns } from '../utils/question-images';
@@ -64,8 +65,9 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 export async function dispatchAI(opts: DispatchOptions): Promise<DispatchResult> {
   const { title, type, options, images, env } = opts;
 
-  // 判断模型类型（文本/视觉）
-  const channelType: ChannelType = images && images.length > 0 ? 'vision' : 'text';
+  // 带图题走视觉链路；纯文本题默认全量条目参与（视觉条目也能答文本题），
+  // 可用设置 text_exclude_vision 让视觉条目只答图题
+  const isVision = !!(images && images.length > 0);
 
   // 读取设置（一次性查询，减少 D1 往返）
   let timeout = 30;
@@ -73,9 +75,10 @@ export async function dispatchAI(opts: DispatchOptions): Promise<DispatchResult>
   let failThreshold = 3;
   let cooldownMinutes = 10;
   let customPrompt = '';
+  let textExcludeVision = false;
   try {
     const settingsRes = await env.DB.prepare(
-      `SELECT key, value FROM settings WHERE key IN ('ai_timeout', 'vision_timeout', 'key_fail_threshold', 'channel_cooldown_minutes', 'system_prompt')`
+      `SELECT key, value FROM settings WHERE key IN ('ai_timeout', 'vision_timeout', 'key_fail_threshold', 'channel_cooldown_minutes', 'system_prompt', 'text_exclude_vision')`
     ).all<{ key: string; value: string }>();
     for (const r of settingsRes.results || []) {
       if (r.key === 'ai_timeout') timeout = parseInt(r.value, 10) || timeout;
@@ -83,25 +86,29 @@ export async function dispatchAI(opts: DispatchOptions): Promise<DispatchResult>
       else if (r.key === 'key_fail_threshold') failThreshold = parseInt(r.value, 10) || failThreshold;
       else if (r.key === 'channel_cooldown_minutes') cooldownMinutes = parseInt(r.value, 10) || 0;
       else if (r.key === 'system_prompt') customPrompt = r.value;
+      else if (r.key === 'text_exclude_vision') textExcludeVision = r.value === '1';
     }
   } catch { /* 用默认值 */ }
   const systemPrompt = buildSystemPrompt(customPrompt);
 
-  // 视觉模型单次超时独立配置（图题含图片下载与视觉推理，天然更慢）；
-  // 调度总预算随通道类型放宽，否则 vision 的长超时一次尝试就吃光预算，失败转移形同虚设
-  const perAttemptTimeout = channelType === 'vision' ? visionTimeout : timeout;
-  const budgetMs = channelType === 'vision' ? MAX_DISPATCH_VISION_MS : MAX_DISPATCH_MS;
+  // 带图题单次超时独立配置（图题含图片下载与视觉推理，天然更慢）；
+  // 调度总预算随题目类型放宽，否则 vision 的长超时一次尝试就吃光预算，失败转移形同虚设
+  const perAttemptTimeout = isVision ? visionTimeout : timeout;
+  const budgetMs = isVision ? MAX_DISPATCH_VISION_MS : MAX_DISPATCH_MS;
   const deadline = Date.now() + budgetMs;
 
-  // 查询该类型下所有启用、有 Key、不在熔断冷却中的条目（单条查询，替代原“模型+Key”两条）。
+  // 带图题仅调度支持视觉的条目（绕过纯文本模型）；纯文本题默认全量条目参与，
+  // 开启 text_exclude_vision 后仅纯文本条目（视觉条目只答图题）。
   // 提前到消息构建之前：无可用条目直接失败，不浪费图片抓取
+  const typeFilter = isVision ? "type = 'vision'" : textExcludeVision ? "type = 'text'" : '';
+  const typeWhere = typeFilter ? `${typeFilter} AND ` : '';
   const channels = await env.DB.prepare(
     `SELECT * FROM ai_channels
-     WHERE type = ? AND enabled = 1
+     WHERE ${typeWhere}enabled = 1
        AND api_key IS NOT NULL AND api_key != ''
        AND (disabled_until IS NULL OR disabled_until <= datetime('now'))
      ORDER BY weight DESC`
-  ).bind(channelType).all<AIChannelRow>();
+  ).all<AIChannelRow>();
 
   const candidates = channels.results || [];
 
@@ -111,16 +118,16 @@ export async function dispatchAI(opts: DispatchOptions): Promise<DispatchResult>
     try {
       const row = await env.DB.prepare(
         `SELECT COUNT(*) AS n FROM ai_channels
-         WHERE type = ? AND enabled = 1
+         WHERE ${typeWhere}enabled = 1
            AND api_key IS NOT NULL AND api_key != ''
            AND disabled_until > datetime('now')`
-      ).bind(channelType).first<{ n: number }>();
+      ).first<{ n: number }>();
       cooling = row?.n || 0;
     } catch { /* 忽略 */ }
     throw new AIError(
       cooling > 0
-        ? `没有可用的${channelType === 'text' ? '文本' : '视觉'}模型（${cooling} 个条目熔断冷却中，稍后自动恢复）`
-        : `没有可用的${channelType === 'text' ? '文本' : '视觉'}模型（请检查是否已添加并启用、是否填写了 API Key）`,
+        ? `没有可用的${isVision ? '视觉' : '文本'}模型（${cooling} 个条目熔断冷却中，稍后自动恢复）`
+        : `没有可用的${isVision ? '视觉' : '文本'}模型（请检查是否已添加并启用、是否填写了 API Key）`,
       'no_channel'
     );
   }
@@ -130,7 +137,7 @@ export async function dispatchAI(opts: DispatchOptions): Promise<DispatchResult>
   let answerMode: UrlQuestionMode | null = null;
   let answerOptionMap: Map<string, string> | null = null;
 
-  if (channelType === 'vision' && images && images.length > 0) {
+  if (isVision && images && images.length > 0) {
     // 1. 提取 title/options 内嵌图片（带位置信息，供图文交错与抓取）
     const patterns = opts.imagePatterns ?? parseImagePatterns(null);
     const titleMatches = extractImageMatches(title, { patterns });
@@ -212,8 +219,11 @@ export async function dispatchAI(opts: DispatchOptions): Promise<DispatchResult>
       );
     }
 
-    // 条目级附加参数（如混合推理模型关闭思考）；存量非法配置降级为不附加，不阻塞搜题
-    const extraParams = parseExtraParams(channel.extra_params as string | null);
+    // 条目级参数：思考等级按模型 ID 自动映射的厂商参数在前，手工 extra_params 在后
+    // （同键以手工配置为准）；存量非法 extra_params 降级为不附加，不阻塞搜题
+    const thinkingParams = buildThinkingParams(channel.model as string, channel.thinking_level);
+    const manualParams = parseExtraParams(channel.extra_params as string | null);
+    const extraParams = thinkingParams || manualParams ? { ...thinkingParams, ...manualParams } : undefined;
 
     // 单次尝试超时不超过剩余预算（预算是硬顶：临近预算末尾的尝试快速失败，
     // 而不是越过预算后再拖满整个超时——否则 vision 最坏可挂 90+60=150s）

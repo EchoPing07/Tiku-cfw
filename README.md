@@ -14,7 +14,7 @@ Tiku-cfw 是一个部署在 Cloudflare Workers 上的 AI 题库服务。它接�
 - 🔍 **OCS 兼容** — 搜题接口完全兼容 OCS `AnswererWrapper` 规范，配置即用
 - 🤖 **多模型调度** — 模型条目化（一个条目 = 端点 + 模型 + 单 Key + 权重 + 视觉开关 + 思考等级），加权随机分流 + 失败自动熔断冷却（到期自动恢复，无需人工重置），支持一键测试连通（成功自动恢复）
 - 💾 **智能缓存** — 题目归一化后精确匹配，命中缓存秒回，永不过期
-- 🖼️ **图片支持** — 带图题目自动路由到支持视觉的模型（可开关绕过纯文本模型）；纯文本题默认全量模型参与，可在设置中限定仅纯文本模型
+- 🖼️ **图片支持** — 带图题目自动路由到支持视觉的模型（可开关绕过纯文本模型）；支持 OCS 5.x **图片题优化**（直接接收 base64 图与 `[图片N]` 占位文本，按原位内联），也支持题干内嵌图片 URL 的服务端抓取；纯文本题默认全量模型参与，可在设置中限定仅纯文本模型
 - 📊 **Web 管理面板** — 仪表盘（题库查询 + Token 用量双分区、14 天趋势图）、题库管理、在线搜题、题库密钥管理、模型列表配置、搜索日志（含 Token 用量与答案纠错）
 - 🌓 **明暗主题** — 跟随系统或手动切换
 - 🚀 **零成本部署** — Cloudflare Workers 免费额度 + D1 免费额度 + GitHub Actions 自动部署
@@ -115,7 +115,7 @@ npx wrangler secret put JWT_SECRET
 ### 本地开发
 
 ```bash
-npm install
+npm install                 # Node ≥ 20（本机若设了 NODE_ENV=production，加 --include=dev）
 npm run db:migrate:local   # 本地建表
 npm run db:seed:local      # 写入初始数据
 npm run db:migrate:share:local  # 密钥分享功能（0004，可选）
@@ -129,6 +129,11 @@ npm run dev                 # 启动开发服务器 → http://localhost:8787
 npm test                    # 单元测试
 npm run typecheck           # 类型检查
 ```
+
+依赖版本：`wrangler ^4`（v3 已弃用）、`@cloudflare/workers-types ^5`、`typescript ^5.9`。
+
+> ⚠️ 不要直接升 TypeScript 7：本项目的 `tsconfig.json` 使用了 `baseUrl` + `paths`，
+> TS 7 已移除 `baseUrl`（报 TS5102）。若需升级，先把 `@/*` 别名改成相对路径导入。
 
 默认密码 `password`。
 
@@ -168,6 +173,18 @@ npm run typecheck           # 类型检查
 
 将复制的 JSON 粘贴到 OCS 脚本的题库配置中即可。OCS 会自动调用你的 Worker 搜题。
 
+生成的配置声明了 OCS 5.x 的**图片题优化**参数（`images` / `suggestion_title` / `suggestion_options`，
+用 `{ handler }` 取值以保住 base64 数组形态），因此：
+
+- 题库卡片能正常探测连通性（OCS 5.1.0+ 会对 `/api/search` 发 `HEAD`/`GET` 探活，本接口对非
+  POST 请求返回 200 而非 405）
+- 图题会由脚本直接上传 base64 图片（不再依赖图床防盗链），服务端把 `[图片N]` 占位符原位
+  替换成图片交给视觉模型
+- 老版本 OCS（无 `env.images`）下 `handler` 返回 `undefined`，字段自动从请求体消失，配置照常可用
+
+> 若使用自建/其它题库，也需在 `data` 里引用这些字段才会被 OCS 判定为“支持图片题优化”，
+> 否则脚本会提示「当前题库配置暂不支持图片、公式等题目处理」。
+
 ---
 
 ## API 参考
@@ -182,10 +199,20 @@ Content-Type: application/json
 {
   "title": "题目内容",
   "type": "single",            // 可选: single/multiple/judgement/completion
-  "options": "A. xxx\nB. xxx", // 可选
-  "images": ["https://..."]     // 可选，有图走支持视觉的模型
+                                // 兼容 OCS 5.x 的 'unknown' 与中文题型（自动折叠/归一化）
+  "options": "A. xxx\nB. xxx", // 可选；也接受字符串数组（按行拼接）
+  "images": ["https://..."],    // 可选，http(s) 图片地址 **或 base64 data URL**
+
+  // ↓ 图片题优化 v2（OCS 5.1.0+ 图片题优化开启时提交）
+  "suggestion_title": "如图 [图片1] 所示……",   // 可选，图片 URL 已换成 [图片N] 的题干
+  "suggestion_options": "A. [图片2]\nB. 乙"     // 可选，同上（选项）
 }
 ```
+
+- `images` 中的 `data:image/*;base64,...` 直接交给视觉模型（不抓取）；单张 ≤ 8 MiB、总量 ≤ 24 MiB、≤ 10 张
+- `suggestion_title` / `suggestion_options` 中的 `[图片N]` 会按 N（从 1 起）内联 `images[N-1]` 到原文位置
+- 缓存键包含 base64 图片的内容哈希：同题同图命中缓存，换了图不会串答案
+- 非 POST 请求（`HEAD`/`GET`/`PUT`…）返回 200 探测响应，供 OCS 5.x 状态探测使用
 
 ### 管理面板 API
 

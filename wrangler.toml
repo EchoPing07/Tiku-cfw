@@ -1,6 +1,9 @@
 name = "tiku-cfw"
 main = "src/index.ts"
-compatibility_date = "2024-12-01"
+# 保持与最新运行时对齐（Cloudflare 官方最佳实践：compatibility_date 应随部署更新）。
+# 2026-08-04 起 nodejs_compat 在最新 compat date 下为默认行为，此处的 flag 成为冗余声明，
+# 保留以兼容较旧的 compatibility_date（降级时不会丢失 Node 兼容层）。
+compatibility_date = "2026-11-01"
 compatibility_flags = ["nodejs_compat"]
 
 # D1 数据库绑定
@@ -27,3 +30,7 @@ local_protocol = "http"
 # 定时任务：每日清理过期搜索日志（按 log_retention_days 设置，0=永久）
 [triggers]
 crons = ["17 3 * * *"]
+
+# 可观测性：开启 Workers Logs，便于排查线上 5xx / AI 调度异常
+[observability]
+enabled = true

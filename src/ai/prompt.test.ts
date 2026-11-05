@@ -88,3 +88,54 @@ describe('buildVisionMessage：图文交错', () => {
     expect(parts[parts.length - 1].type).toBe('image_url');
   });
 });
+
+describe('buildVisionMessage：OCS 图片题优化 v2（[图片N] 占位 + base64 内联）', () => {
+  it('[图片N] 占位符原位替换为 base64 image_url（图片保持原文位置）', () => {
+    const img1 = 'data:image/png;base64,AAA1';
+    const img2 = 'data:image/png;base64,AAA2';
+    const parts = buildVisionMessage(
+      '题干前 [图片1] 中间 [图片2] 末尾',
+      undefined,
+      new Map(),
+      [],
+      undefined,
+      undefined,
+      [img1, img2]
+    );
+    expect(parts.map((p) => p.type)).toEqual(['text', 'image_url', 'text', 'image_url', 'text']);
+    expect(imageUrls(parts)).toEqual([img1, img2]);
+    expect(parts[0].text).toContain('题干前');
+    expect(parts[2].text).toContain('中间');
+    expect(parts[4].text).toContain('末尾');
+    // 占位符本身不再出现在文本里
+    const text = parts.filter((p) => p.type === 'text').map((p) => p.text).join('');
+    expect(text).not.toContain('[图片1]');
+  });
+
+  it('选项里的 [图片N] 同样内联（选项占位 → 图片）', () => {
+    const img = 'data:image/png;base64,OPT';
+    const parts = buildVisionMessage(
+      '题干',
+      'A. [图片1]\nB. 乙',
+      new Map(),
+      [],
+      'single',
+      undefined,
+      [img]
+    );
+    expect(imageUrls(parts)).toEqual([img]);
+  });
+
+  it('编号越界时保留占位符文本，不丢内容', () => {
+    const parts = buildVisionMessage('题 [图片3]', undefined, new Map(), [], undefined, undefined, ['data:image/png;base64,A']);
+    expect(imageUrls(parts)).toEqual([]);
+    const text = parts.filter((p) => p.type === 'text').map((p) => p.text).join('');
+    expect(text).toContain('[图片3]');
+  });
+
+  it('未传 inlineImages 时 [图片N] 原样保留（老客户端 / 文本模型链路）', () => {
+    const parts = buildVisionMessage('题 [图片1]', undefined, new Map(), [], undefined);
+    const text = parts.filter((p) => p.type === 'text').map((p) => p.text).join('');
+    expect(text).toContain('[图片1]');
+  });
+});

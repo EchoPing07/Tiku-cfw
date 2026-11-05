@@ -1,4 +1,5 @@
 import type { QuestionType } from './types';
+import { normalizeQuestionType } from './question-type';
 
 /** 判断是否为判断题答案 */
 function isJudgementAnswer(answer: string): boolean {
@@ -36,8 +37,11 @@ export function isRefusalAnswer(answer: string): boolean {
 }
 
 /** 从 AI 响应中提取纯答案 */
-export function parseAIAnswer(raw: string, type?: QuestionType): string {
+export function parseAIAnswer(raw: string, type?: QuestionType | string): string {
   let answer = raw.trim();
+  // 题型归一化：OCS 5.x 会传字面量 'unknown'（以及中文题型），折叠成四种题型之一或 undefined，
+  // 否则 'unknown' 会绕过下方多选题的 A#B 拆分
+  const normalizedType = normalizeQuestionType(type as string | undefined);
 
   // 1. 提取 markdown 代码块内容（而非整段删除，避免答案被吞空）
   answer = answer.replace(/```(?:[a-zA-Z0-9_-]*\n)?([\s\S]*?)```/g, '$1').trim();
@@ -49,9 +53,9 @@ export function parseAIAnswer(raw: string, type?: QuestionType): string {
   answer = answer.replace(/\n/g, ' ').trim();
 
   // 4. 如果是选择题且答案以字母开头，规范化
-  if ((type === 'single' || type === 'multiple' || !type) && /^[A-Z]/i.test(answer)) {
+  if ((normalizedType === 'single' || normalizedType === 'multiple' || !normalizedType) && /^[A-Z]/i.test(answer)) {
     // 未指定题型时，TRUE/FALSE/T/F 等判断题式单词不拆字母（否则 "T" → "T#R#U#E"），交给下方判断题归一化
-    const skipForJudgement = !(type === 'single' || type === 'multiple') && isJudgementAnswer(answer);
+    const skipForJudgement = !(normalizedType === 'single' || normalizedType === 'multiple') && isJudgementAnswer(answer);
     // 如果答案只是字母组合（如 "AB" 或 "A, B, C"）
     if (!skipForJudgement && answer.replace(/[,，、\s#]/g, '').match(/^[A-Z]+$/i)) {
       const letters = answer.match(/[A-Z]/gi);
@@ -62,7 +66,7 @@ export function parseAIAnswer(raw: string, type?: QuestionType): string {
   }
 
   // 5. 判断题规范化（整串匹配，避免"正确率"等误命中）
-  if (type === 'judgement' || isJudgementAnswer(answer)) {
+  if (normalizedType === 'judgement' || isJudgementAnswer(answer)) {
     const j = answer.trim();
     if (/^(对|正确|是|true|√|T|yes)$/i.test(j)) return '正确';
     if (/^(错|错误|否|false|×|F|no)$/i.test(j)) return '错误';

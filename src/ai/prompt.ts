@@ -79,6 +79,8 @@ function visionAnswerInstruction(answerRule: string): string {
  * - 选项按模式重新编号（消除 A./B. 与空行序号混乱），或作为补充材料保留；
  * - imageMap：归一化 URL → 已解析 URL（抓取成功为 data URL，失败回退原始 URL 由厂商代抓）；
  * - extraImages：客户端 images 数组中不在题目文本里的图（无位置信息，末尾追加）；
+ * - inlineImages：OCS 图片题优化 v2 直传的 base64 图，与文本中的 `[图片N]` 占位符
+ *   严格同序，按占位符原位置内联（N 从 1 开始）；
  * - detail: 'high'：公式/图表类小图需高精细度识别。
  */
 export function buildVisionMessage(
@@ -87,7 +89,8 @@ export function buildVisionMessage(
   imageMap: Map<string, string>,
   extraImages: string[],
   type?: string,
-  patterns?: RegExp[]
+  patterns?: RegExp[],
+  inlineImages?: string[]
 ): VisionContentPart[] {
   // 题型模式推断（type 缺失时不盲猜：解析不出选项块按开放题处理）
   const mode = classifyUrlQuestionMode(type, options);
@@ -112,10 +115,47 @@ export function buildVisionMessage(
         }
   );
 
+  // OCS v2：把文本中的 [图片N] 占位符原位替换为内联 base64 图（N 从 1 起）
+  const withInline = inlineImages && inlineImages.length > 0
+    ? splitByImagePlaceholders(parts, inlineImages)
+    : parts;
+
   // 客户端 images 数组中不在题目文本里的图（无位置信息，统一追加在末尾）
   for (const u of extraImages) {
     if (!u) continue;
-    parts.push({ type: 'image_url', image_url: { url: imageMap.get(u) ?? u, detail: 'high' } });
+    withInline.push({ type: 'image_url', image_url: { url: imageMap.get(u) ?? u, detail: 'high' } });
   }
-  return parts;
+  return withInline;
+}
+
+/** `[图片N]` 占位符（OCS 图片题优化 v2 的 suggestion_title/suggestion_options 形态） */
+const IMAGE_PLACEHOLDER_RE = /\[图片(\d+)\]/g;
+
+/**
+ * 把文本分片里的 `[图片N]` 占位符原位替换为 image_url 分片（N 为 1 基下标）。
+ * 编号越界或对应图片为空时保留原占位符文本，不丢内容。
+ */
+function splitByImagePlaceholders(parts: VisionContentPart[], inlineImages: string[]): VisionContentPart[] {
+  const out: VisionContentPart[] = [];
+  for (const p of parts) {
+    if (p.type !== 'text' || !p.text || !p.text.includes('[图片')) {
+      out.push(p);
+      continue;
+    }
+    const text = p.text;
+    let cursor = 0;
+    IMAGE_PLACEHOLDER_RE.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = IMAGE_PLACEHOLDER_RE.exec(text)) !== null) {
+      const index = parseInt(m[1], 10) - 1;
+      const url = inlineImages[index];
+      if (!url) continue; // 编号无效：保留占位符文本
+      if (m.index > cursor) out.push({ type: 'text', text: text.slice(cursor, m.index) });
+      out.push({ type: 'image_url', image_url: { url, detail: 'high' } });
+      cursor = m.index + m[0].length;
+    }
+    if (cursor < text.length) out.push({ type: 'text', text: text.slice(cursor) });
+    if (cursor === 0) out.push({ type: 'text', text }); // 无有效占位符：原样保留
+  }
+  return out;
 }

@@ -17,6 +17,15 @@ interface DispatchOptions {
   type?: QuestionType;
   options?: string;
   images?: string[];
+  /**
+   * OCS 图片题优化 v2：直接传入的 base64 data URL（上游已校验大小），
+   * 无需 Worker 再抓取，直接交给视觉模型。
+   */
+  inlineImages?: string[];
+  /** v2：原题题干把图片 URL 换成 `[图片N]` 后的文本（与 inlineImages 严格同序） */
+  suggestionTitle?: string;
+  /** v2：原题选项把图片 URL 换成 `[图片N]` 后的文本 */
+  suggestionOptions?: string;
   /** 图片性 URL 模式（settings.image_url_patterns；缺省用默认 /ananas/） */
   imagePatterns?: RegExp[];
   env: Env;
@@ -63,11 +72,11 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 
 /** 多模型 AI 调度器（模型条目化：一个条目 = 端点 + 模型 + 单 Key + 权重） */
 export async function dispatchAI(opts: DispatchOptions): Promise<DispatchResult> {
-  const { title, type, options, images, env } = opts;
+  const { title, type, options, images, inlineImages, suggestionTitle, suggestionOptions, env } = opts;
 
   // 带图题走视觉链路；纯文本题默认全量条目参与（视觉条目也能答文本题），
   // 可用设置 text_exclude_vision 让视觉条目只答图题
-  const isVision = !!(images && images.length > 0);
+  const isVision = !!((images && images.length > 0) || (inlineImages && inlineImages.length > 0));
 
   // 读取设置（一次性查询，减少 D1 往返）
   let timeout = 30;
@@ -137,15 +146,19 @@ export async function dispatchAI(opts: DispatchOptions): Promise<DispatchResult>
   let answerMode: UrlQuestionMode | null = null;
   let answerOptionMap: Map<string, string> | null = null;
 
-  if (isVision && images && images.length > 0) {
+  if (isVision && ((images && images.length > 0) || (inlineImages && inlineImages.length > 0))) {
     // 1. 提取 title/options 内嵌图片（带位置信息，供图文交错与抓取）
     const patterns = opts.imagePatterns ?? parseImagePatterns(null);
-    const titleMatches = extractImageMatches(title, { patterns });
-    const optionsMatches = options ? extractImageMatches(options, { patterns }) : [];
+    // OCS v2 提供了 [图片N] 占位文本时以它为准（原题 URL 已被换成占位符，不再有 URL 可提）；
+    // 否则回落到原 title/options 的 URL 提取
+    const visionTitle = suggestionTitle && suggestionTitle.trim() ? suggestionTitle : title;
+    const visionOptions = suggestionTitle && suggestionTitle.trim() ? suggestionOptions : options;
+    const titleMatches = extractImageMatches(visionTitle, { patterns });
+    const optionsMatches = visionOptions ? extractImageMatches(visionOptions, { patterns }) : [];
     const textUrls = new Set([...titleMatches, ...optionsMatches].map((m) => m.url));
 
     // 2. images 参数中不在题目文本里的额外图（无位置信息，消息末尾追加）
-    const extraImages = images.filter((u) => u && !textUrls.has(u));
+    const extraImages = (images ?? []).filter((u) => u && !textUrls.has(u));
 
     // 3. Worker 侧伪装下载（UA/Referer 伪装 → 魔数嗅探 → base64 内联）；单图失败回退原始
     //    URL（厂商代抓兜底）；下载耗时计入调度总预算
@@ -176,14 +189,26 @@ export async function dispatchAI(opts: DispatchOptions): Promise<DispatchResult>
       resolvedImages.set(e.key, dataUrls.get(e.key) ?? e.url);
     }
 
-    // 4. 图文交错消息（图片按原文位置插入）+ ANSWER 协议
+    // 4. 图文交错消息（图片按原文位置插入）+ ANSWER 协议；v2 的 [图片N] 占位符
+    //    由 inlineImages 原位内联
     messages = [
       { role: 'system', content: systemPrompt },
-      { role: 'user', content: buildVisionMessage(title, options, resolvedImages, extraImages, type, patterns) },
+      {
+        role: 'user',
+        content: buildVisionMessage(
+          visionTitle,
+          visionOptions,
+          resolvedImages,
+          extraImages,
+          type,
+          patterns,
+          inlineImages
+        ),
+      },
     ];
 
-    answerMode = classifyUrlQuestionMode(type, options);
-    answerOptionMap = buildUrlOptionMapForMode(answerMode, options);
+    answerMode = classifyUrlQuestionMode(type, visionOptions);
+    answerOptionMap = buildUrlOptionMapForMode(answerMode, visionOptions);
   } else {
     messages = [
       { role: 'system', content: systemPrompt },

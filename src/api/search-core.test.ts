@@ -28,9 +28,64 @@ describe('parseSearchInput', () => {
     expect(parseSearchInput({ title: 't', options: 'o'.repeat(16385) }).ok).toBe(false);
   });
 
-  it('type/options 非字符串被拒绝', () => {
+  it('type 非字符串被拒绝；options 数组按行拼接（兼容 OCS 官方 handler 示例）', () => {
     expect(parseSearchInput({ title: 't', type: 1 }).ok).toBe(false);
-    expect(parseSearchInput({ title: 't', options: ['A'] }).ok).toBe(false);
+
+    const r = parseSearchInput({ title: 't', options: ['A. 甲', 'B. 乙', '', null] });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.input.options).toBe('A. 甲\nB. 乙');
+
+    expect(parseSearchInput({ title: 't', options: [1] }).ok).toBe(false);
+  });
+
+  it('type=unknown（OCS 5.x 缺省值）折叠为 undefined；中文/别名题型归一化', () => {
+    const unknown = parseSearchInput({ title: 't', type: 'unknown' });
+    expect(unknown.ok).toBe(true);
+    if (unknown.ok) expect(unknown.input.type).toBeUndefined();
+
+    const zh = parseSearchInput({ title: 't', type: '多选题' });
+    expect(zh.ok).toBe(true);
+    if (zh.ok) expect(zh.input.type).toBe('multiple');
+
+    const alias = parseSearchInput({ title: 't', type: 'single_choice' });
+    expect(alias.ok).toBe(true);
+    if (alias.ok) expect(alias.input.type).toBe('single');
+  });
+
+  it('图片题优化 v2：base64 data URL 不再按 URL 长度拒绝（≤5 MiB 可用）', () => {
+    const b64 = 'data:image/png;base64,' + 'A'.repeat(200 * 1024);
+    const r = parseSearchInput({ title: '题 [图片1]', images: [b64] });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.input.images).toEqual([b64]);
+  });
+
+  it('图片题优化 v2：单张/总量超限仍拒绝', () => {
+    const huge = 'data:image/png;base64,' + 'A'.repeat(9 * 1024 * 1024);
+    const r = parseSearchInput({ title: 't', images: [huge] });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.msg).toContain('单张图片过大');
+  });
+
+  it('图片题优化 v2：suggestion_title/suggestion_options 接收字符串，空串视为未提供', () => {
+    const r = parseSearchInput({
+      title: '题 [图片1]',
+      suggestion_title: '题 [图片1]',
+      suggestion_options: 'A. [图片2]\nB. 乙',
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.input.suggestionTitle).toBe('题 [图片1]');
+      expect(r.input.suggestionOptions).toBe('A. [图片2]\nB. 乙');
+    }
+
+    const empty = parseSearchInput({ title: 't', suggestion_title: '   ', suggestion_options: '' });
+    expect(empty.ok).toBe(true);
+    if (empty.ok) {
+      expect(empty.input.suggestionTitle).toBeUndefined();
+      expect(empty.input.suggestionOptions).toBeUndefined();
+    }
+
+    expect(parseSearchInput({ title: 't', suggestion_title: 1 }).ok).toBe(false);
   });
 
   it('images 非数组（含字符串）被拒绝，不再按字符迭代', () => {
@@ -54,8 +109,7 @@ describe('parseSearchInput', () => {
     expect(parseSearchInput({ title: 't', images: ten }).ok).toBe(true);
     expect(parseSearchInput({ title: 't', images: [...ten, 'https://b.png'] }).ok).toBe(false);
     expect(parseSearchInput({ title: 't', images: ['https://' + 'x'.repeat(8200)] }).ok).toBe(false);
-  });
-});
+  });});
 
 describe('truncate', () => {
   it('null/undefined/空串返回 null', () => {
@@ -407,5 +461,82 @@ describe('performSearch（入库门槛）', () => {
     const inserts = insertStmts(executed);
     expect(inserts).toHaveLength(1);
     expect(inserts[0].params[3]).toBe(hash);
+  });
+});
+
+// ======================================================================
+// performSearch：OCS 图片题优化 v2（base64 图 + [图片N] 占位文本）
+// ======================================================================
+describe('performSearch（OCS v2 图片题优化）', () => {
+  const IMG_A = 'data:image/png;base64,' + 'A'.repeat(500);
+  const IMG_B = 'data:image/png;base64,' + 'B'.repeat(500);
+
+  it('base64 图进 inlineImages（不再当 URL 抓取），suggestion_* 透传给 dispatcher', async () => {
+    const { env } = makeEnv({});
+    vi.mocked(dispatchAI).mockResolvedValue(aiResult);
+
+    await performSearch(env, {
+      title: '题干 [图片1] 与 [图片2]',
+      type: 'single',
+      options: 'A. [图片3]',
+      images: [IMG_A, IMG_B],
+      suggestionTitle: '题干 [图片1] 与 [图片2]',
+      suggestionOptions: 'A. [图片3]',
+    }, null);
+
+    const call = vi.mocked(dispatchAI).mock.calls[0][0];
+    expect(call.inlineImages).toEqual([IMG_A, IMG_B]);
+    expect(call.images).toEqual([]); // base64 不进 URL 抓取列表
+    expect(call.suggestionTitle).toBe('题干 [图片1] 与 [图片2]');
+    expect(call.suggestionOptions).toBe('A. [图片3]');
+    expect(call.type).toBe('single');
+  });
+
+  it('base64 图内容参与缓存键：同题同图命中缓存，换图不串答案', async () => {
+    const input = { title: '题干 [图片1]', images: [IMG_A] };
+
+    // 第一次：未命中 → AI
+    const first = makeEnv({});
+    vi.mocked(dispatchAI).mockResolvedValue(aiResult);
+    const r1 = await performSearch(first.env, input, null);
+    expect(r1.fromCache).toBe(false);
+
+    // 取出实际写入的缓存键，模拟该行已入库
+    const insertedHash = insertStmts(first.executed)[0].params[3] as string;
+
+    // 第二次：同题同图 → 命中
+    const second = makeEnv({ [insertedHash]: { id: 'q-img', question: '题干 [图片1]', answer: '缓存图答案' } });
+    const r2 = await performSearch(second.env, input, null);
+    expect(r2.fromCache).toBe(true);
+    expect(r2.answer).toBe('缓存图答案');
+
+    // 第三次：同题干、不同图 → 不同键，必须未命中
+    const third = makeEnv({ [insertedHash]: { id: 'q-img', question: '题干 [图片1]', answer: '缓存图答案' } });
+    vi.mocked(dispatchAI).mockResolvedValue({ ...aiResult, content: '另一张图的答案' });
+    const r3 = await performSearch(third.env, { title: '题干 [图片1]', images: [IMG_B] }, null);
+    expect(r3.fromCache).toBe(false);
+    expect(r3.answer).toBe('另一张图的答案');
+  });
+
+  it('无图题（images 为空数组）仍走文本链路', async () => {
+    const { env } = makeEnv({});
+    vi.mocked(dispatchAI).mockResolvedValue(aiResult);
+
+    await performSearch(env, { title: '纯文本题', images: [] }, null);
+
+    const call = vi.mocked(dispatchAI).mock.calls[0][0];
+    expect(call.inlineImages).toEqual([]);
+    expect(call.images).toEqual([]);
+  });
+
+  it('http(s) 图与 base64 图可共存：前者进 images（抓取），后者进 inlineImages', async () => {
+    const { env } = makeEnv({});
+    vi.mocked(dispatchAI).mockResolvedValue(aiResult);
+
+    await performSearch(env, { title: '题 [图片1]', images: [IMG_A, 'https://x.com/a.png'] }, null);
+
+    const call = vi.mocked(dispatchAI).mock.calls[0][0];
+    expect(call.inlineImages).toEqual([IMG_A]);
+    expect(call.images).toEqual(['https://x.com/a.png']);
   });
 });

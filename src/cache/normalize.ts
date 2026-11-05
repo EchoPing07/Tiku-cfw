@@ -91,7 +91,15 @@ export interface NormalizedQuestion {
 export async function normalizeAndHash(
   question: string,
   options?: string,
-  opts?: { imagePatterns?: RegExp[] }
+  opts?: {
+    imagePatterns?: RegExp[];
+    /**
+     * 额外的图片身份键（OCS 图片题优化 v2：图片以 base64 data URL 经 images 数组传入，
+     * 题干里只有 [图片N] 占位符）。调用方用 data URL 的内容哈希作为身份，
+     * 使「同图不同 base64 形态」不会串题、「不同图」不会碰撞。
+     */
+    extraIdentities?: string[];
+  }
 ): Promise<NormalizedQuestion> {
   const extractOpts = opts?.imagePatterns ? { patterns: opts.imagePatterns } : undefined;
   const titleInfo = extractUrlInfo(question, extractOpts);
@@ -101,7 +109,11 @@ export async function normalizeAndHash(
   const optionsNorm = optionsInfo ? normalizeOptions(optionsInfo.text) : '';
 
   // URL 集合（排序去重）参与键：身份独立于题干文本——既不丢（不会碰撞）也不扰（不污染文本归一化）
-  const urlSet = [...new Set([...titleInfo.urls, ...(optionsInfo?.urls ?? [])])].filter(Boolean).sort();
+  const urlSet = [...new Set([
+    ...titleInfo.urls,
+    ...(optionsInfo?.urls ?? []),
+    ...(opts?.extraIdentities ?? []).filter(Boolean),
+  ])].sort();
 
   // 题干侧剥离控制字符：\u0000 是键分界符，不能让题干文本伪造边界。
   // 选项侧不可在此处再剥 \u0001（行分隔符在 join 后是键的一部分，剥掉会丢失选项条数信息）；

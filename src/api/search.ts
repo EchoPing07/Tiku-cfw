@@ -11,12 +11,34 @@ async function hashRaw(raw: string): Promise<string> {
   return hash;
 }
 
+/**
+ * 连通性探测响应（GET / HEAD /api/search）。
+ *
+ * OCS 5.1.0 起题库状态探测改为向 `item.url` 本身（即本接口路径）发 HEAD（405/501 时回退
+ * GET）并要求 2xx–3xx 才算「连接成功」（scripts/src/utils/ui.ts probeAnswerer）。若这里仍按
+ * 「仅支持 POST」回 405，OCS 面板会稳定显示「连接失败（405）」而 POST 搜题其实完全正常。
+ *
+ * 该响应不含任何密钥/题库数据，可安全匿名访问：HEAD 返回空 200，GET 返回接口说明。
+ */
+export function probeResponse(method: string): Response {
+  if (method === 'HEAD') {
+    return new Response(null, { status: 200, headers: { 'Cache-Control': 'no-store' } });
+  }
+  return json({
+    code: 1,
+    msg: 'Tiku-cfw 搜题接口正常，请使用 POST 提交 JSON 请求体',
+    service: 'tiku-cfw',
+    status: 'ok',
+  });
+}
+
 /** 搜题接口（OCS 兼容） */
 export async function searchHandler(request: Request, env: Env): Promise<Response> {
   if (request.method === 'OPTIONS') return options();
 
+  // 非 POST：视为连通性探测（OCS 5.x 用 HEAD/GET 探活），返回 200 而非 405
   if (request.method !== 'POST') {
-    return error('仅支持 POST 请求', 405);
+    return probeResponse(request.method);
   }
 
   // API Key 鉴权
